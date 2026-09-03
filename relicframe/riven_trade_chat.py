@@ -47,6 +47,9 @@ class TradeChatImportResult:
     unparsed_line_count: int
 
 
+TRADE_CHAT_BUDGET_BYTES = 16 * 1024 * 1024
+
+
 class RivenTradeChatLog:
     def __init__(self, path: str | Path, weapon_names: Iterable[str]):
         self.path = Path(path)
@@ -122,28 +125,32 @@ class RivenTradeChatLog:
         return offers, unparsed
 
     def load(self) -> list[TradeChatOffer]:
+        return list(self._iter_offers())
+
+    def _iter_offers(self):
         if not self.path.exists():
-            return []
-        result: list[TradeChatOffer] = []
+            return
         try:
-            lines = self.path.read_text(encoding="utf-8").splitlines()
+            with self.path.open(encoding="utf-8") as stream:
+                for line in stream:
+                    try:
+                        yield TradeChatOffer(**json.loads(line))
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        continue
         except OSError:
-            return []
-        for line in lines:
-            try:
-                row = json.loads(line)
-                result.append(TradeChatOffer(**row))
-            except (json.JSONDecodeError, TypeError, ValueError):
-                continue
-        return result
+            return
 
     def import_text(self, text: str, *, observed_at: datetime | None = None, source: str = "manual") -> TradeChatImportResult:
         parsed, unparsed = self.parse(text, observed_at=observed_at, source=source)
         with self._lock:
-            existing_ids = {offer.offer_id for offer in self.load()}
+            existing_ids = {offer.offer_id for offer in self._iter_offers()}
             added = [offer for offer in parsed if offer.offer_id not in existing_ids]
             duplicates = len(parsed) - len(added)
             if added:
+                size = self.path.stat().st_size if self.path.exists() else 0
+                payload_size = sum(len((json.dumps(asdict(offer), ensure_ascii=False) + "\n").encode("utf-8")) for offer in added)
+                if size + payload_size > TRADE_CHAT_BUDGET_BYTES:
+                    raise RuntimeError("Trade-chat log reached its 16 MiB budget. Export/archive it before importing more; existing data is unchanged.")
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 with self.path.open("a", encoding="utf-8", newline="\n") as target:
                     for offer in added:
@@ -154,7 +161,7 @@ class RivenTradeChatLog:
         cutoff = datetime.now(UTC) - timedelta(days=max(1, days))
         marker = _key(weapon or "")
         result = []
-        for offer in self.load():
+        for offer in self._iter_offers():
             try:
                 stamp = datetime.fromisoformat(offer.observed_at)
             except ValueError:

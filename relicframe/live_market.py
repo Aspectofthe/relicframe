@@ -51,7 +51,7 @@ DUCAT_MAP_CACHE_PATH = os.path.join(CACHE_DIR, "ducat_map.json")
 class LiveMarket:
     def __init__(
         self,
-        max_concurrent: int = 15,
+        max_concurrent: int = 4,
         max_per_second: float = 5.0,
         sweep_interval_seconds: float = 300.0,
         enable_websocket: bool = False,
@@ -68,7 +68,7 @@ class LiveMarket:
         # survives across LiveMarket restarts instead of this reloading
         # a fresh one from disk every time the live market (re)starts.
         self.seller_blacklist = seller_blacklist if seller_blacklist is not None else SellerBlacklist()
-        self.store = OrderBookStore(blacklist=self.seller_blacklist)
+        self.store = OrderBookStore(blacklist=self.seller_blacklist, compressed=True)
         self.reconciler: Reconciler | None = None
         self.ws_client: WfmWebSocketClient | None = None
         self.sweep_interval_seconds = sweep_interval_seconds

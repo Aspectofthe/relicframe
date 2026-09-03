@@ -11,6 +11,7 @@ on demand, or run the bot with --auto-refresh-minutes for a background loop.
 from __future__ import annotations
 
 import asyncio
+from workload import heavy_operation
 import os
 import time
 from dataclasses import dataclass
@@ -97,7 +98,7 @@ class BotState:
         self,
         force_catalog_refresh: bool = False,
         progress_cb=None,
-        max_concurrent: int = 15,
+        max_concurrent: int = 4,
         max_per_second: float = 5.0,
         sweep_interval_seconds: float = 300.0,
         enable_websocket: bool = False,
@@ -124,7 +125,8 @@ class BotState:
                 seller_blacklist=self.seller_blacklist,
             )
             try:
-                await market.start(self.relics, force_catalog_refresh=force_catalog_refresh, progress_cb=progress_cb)
+                async with heavy_operation("relic bootstrap"):
+                    await market.start(self.relics, force_catalog_refresh=force_catalog_refresh, progress_cb=progress_cb)
             except asyncio.CancelledError:
                 # A refresh kill must also close a partially bootstrapped client.
                 await market.stop()
@@ -181,7 +183,8 @@ class BotState:
         """
         refinement = refinement or self.default_refinement
         await self.ensure_live_market_started(force_catalog_refresh=force_catalog_refresh, progress_cb=progress_cb)
-        return self.build_snapshot(refinement)
+        # Lossless book decoding is CPU work; do not delay Discord heartbeats.
+        return await asyncio.to_thread(self.build_snapshot, refinement)
 
     def require_snapshot(self) -> Snapshot:
         if self.snapshot is None:

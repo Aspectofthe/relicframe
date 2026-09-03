@@ -2,7 +2,7 @@
 order_book.py
 The full, live order book for one WFM item slug - not a "top 5" or a
 bulk-average snapshot, but every order the API returned for that slug,
-kept in memory and updated two ways:
+kept in memory (losslessly compressed in the bot) and updated two ways:
 
 1. A full REST refetch (`/orders/item/{slug}`) - authoritative, replaces
    the book wholesale. This is both the initial bootstrap AND the periodic
@@ -25,6 +25,8 @@ path.
 from __future__ import annotations
 
 import time
+import json
+import zlib
 from dataclasses import dataclass, field
 
 import order_math
@@ -136,11 +138,36 @@ class OrderBook:
         return order_math.matching_entries(self.online_sell_orders(), subtype)
 
 
+class CompressedOrderBook(OrderBook):
+    """Lossless per-book storage: all raw fields/orders, decoded only on access.
+
+    No price truncation or disk snapshot. Callers must replace ``orders`` rather
+    than mutating the returned list (the normal store APIs already do so).
+    """
+    @property
+    def orders(self):
+        return json.loads(zlib.decompress(self._packed))
+
+    @orders.setter
+    def orders(self, rows):
+        self._packed = zlib.compress(json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode(), level=1)
+
+    def apply_ws_order_created(self, order):
+        rows = self.orders
+        order_id = order.get("id")
+        if order_id is not None and any(row.get("id") == order_id for row in rows):
+            return
+        rows.append(order)
+        self.orders = rows
+        self.last_ws_update = time.time()
+
+
 class OrderBookStore:
     """Every tracked slug's OrderBook, keyed by slug."""
 
-    def __init__(self, blacklist=None):
+    def __init__(self, blacklist=None, *, compressed=False):
         self._books: dict[str, OrderBook] = {}
+        self._book_type = CompressedOrderBook if compressed else OrderBook
         # SellerBlacklist | None - see seller_blacklist.py. None (the
         # default, and what every pre-existing caller/test still gets)
         # means no filtering, preserving prior behavior exactly.
@@ -157,7 +184,7 @@ class OrderBookStore:
     def get_or_create(self, slug: str) -> OrderBook:
         book = self._books.get(slug)
         if book is None:
-            book = OrderBook(slug=slug)
+            book = self._book_type(slug=slug)
             self._books[slug] = book
         return book
 
@@ -225,4 +252,3 @@ class OrderBookStore:
             self._books.keys(),
             key=lambda s: (self._books[s].last_attempted is not None, self._books[s].last_attempted or 0.0),
         )
-

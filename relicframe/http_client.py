@@ -49,7 +49,7 @@ DEFAULT_429_BACKOFF_SECONDS = 2.0
 class WfmHttpClient:
     def __init__(
         self,
-        max_concurrent: int = 15,
+        max_concurrent: int = 4,
         max_per_second: float = 5.0,
         session: aiohttp.ClientSession | None = None,
     ):
@@ -64,12 +64,13 @@ class WfmHttpClient:
         waiting for a slot rather than waiting on the clock.
         """
         self._limiter = AsyncRateLimiter(max_concurrent=max_concurrent, max_per_second=max_per_second)
+        self._max_concurrent = max(1, max_concurrent)
         self._session = session
         self._owns_session = session is None
 
     async def __aenter__(self) -> "WfmHttpClient":
         if self._session is None:
-            connector = aiohttp.TCPConnector(limit=0)  # pool sizing is handled by our own limiter, not aiohttp's
+            connector = aiohttp.TCPConnector(limit=self._max_concurrent)
             self._session = aiohttp.ClientSession(
                 headers=HEADERS,
                 connector=connector,
@@ -141,14 +142,10 @@ class WfmHttpClient:
         on_result: Callable[[str, list[dict] | None, Exception | None], Awaitable[None] | None],
     ) -> None:
         """
-        Dispatches a full-order-book fetch for every slug in `slugs`,
-        bounded by this client's concurrency/rate limiter (so this is safe
-        to call with hundreds or thousands of slugs at once - it doesn't
-        blast them all onto the wire simultaneously, the limiter still
-        governs actual concurrency and rate).
-
+        A fixed worker queue fetches every slug under the concurrency/rate
+        limiter, without one queued Task and retained result per item.
         Calls `on_result(slug, orders, error)` as EACH request completes,
-        via asyncio.as_completed - not after the whole batch finishes.
+        not after the whole batch finishes.
         Exactly one of `orders` / `error` is None. `on_result` may be a
         plain function or an async function; both are supported so a
         caller storing results into an OrderBookStore (a synchronous
@@ -158,20 +155,23 @@ class WfmHttpClient:
         `error` and every other slug keeps going, since one bad/renamed
         slug shouldn't stall pricing for everything else.
         """
-        async def _one(slug: str):
-            try:
-                orders = await self.get_full_order_book(slug)
-                return slug, orders, None
-            except Exception as e:  # noqa: BLE001 - reported per-slug, not raised
-                return slug, None, e
-
-        tasks = [asyncio.ensure_future(_one(slug)) for slug in slugs]
-        try:
-            for coro in asyncio.as_completed(tasks):
-                slug, orders, error = await coro
+        pending = iter(slugs)
+        async def worker():
+            for slug in pending:
+                orders, error = None, None
+                try:
+                    orders = await self.get_full_order_book(slug)
+                except Exception as exc:  # one failed item must not abort the batch
+                    error = exc
                 result = on_result(slug, orders, error)
                 if asyncio.iscoroutine(result):
                     await result
+                # Do not retain response dictionaries in completed Task results.
+                orders = result = error = None
+
+        tasks = [asyncio.create_task(worker()) for _ in range(min(len(slugs), getattr(self, "_max_concurrent", 4)))]
+        try:
+            await asyncio.gather(*tasks)
         finally:
             # Killing a bootstrap must not leave hundreds of queued HTTP tasks.
             for task in tasks:

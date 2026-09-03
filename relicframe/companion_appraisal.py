@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -67,7 +68,7 @@ class CompanionAppraiser:
     def _load(path: Path, source: str, source_weight: float) -> list[dict]:
         if not path.is_file():
             return []
-        records_by_fingerprint: dict[str, dict] = {}
+        records_by_fingerprint: dict[bytes, dict] = {}
         with path.open("r", encoding="utf-8") as stream:
             for line in stream:
                 row = json.loads(line)
@@ -77,14 +78,19 @@ class CompanionAppraiser:
                 low = float(amounts[0].get("low", 0))
                 high = float(amounts[0].get("high", low))
                 if 5 <= low <= high <= 10_000:
-                    row["_appraisal_source"] = source
-                    row["_source_weight"] = source_weight
                     text = " ".join(str(row.get("text", "")).casefold().split())
                     assets = sorted(
                         f"{item.get('filename', '')}:{item.get('url', '')}"
                         for item in row.get("attachments", [])
                     )
                     fingerprint = "\0".join((text, *assets)) or str(row.get("message_id", ""))
+                    fingerprint = hashlib.sha256(fingerprint.encode()).digest()
+                    # Pricing only uses these fields. Raw messages/assets remain
+                    # untouched in the source JSONL, not duplicated in RAM.
+                    row = {"timestamp": row.get("timestamp", ""), "traits": row.get("traits") or {},
+                           "classification": row.get("classification"), "amounts": [{"low": low, "high": high}],
+                           "attachments": bool(row.get("attachments")),
+                           "_appraisal_source": source, "_source_weight": source_weight}
                     previous = records_by_fingerprint.get(fingerprint)
                     if previous is None or row.get("timestamp", "") >= previous.get("timestamp", ""):
                         records_by_fingerprint[fingerprint] = row

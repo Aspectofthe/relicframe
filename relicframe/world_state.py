@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import aiohttp
+from workload import heavy_operation
 
 WORLD_STATE_URL = "https://api.warframestat.us/pc"
 OFFICIAL_WORLD_STATE_URL = "https://api.warframe.com/cdn/worldState.php"
@@ -683,15 +684,19 @@ class WorldStateClient:
         retry_after = STATIC_REFRESH_SECONDS if self.static_complete else STATIC_RETRY_SECONDS
         if not force and self.static_attempted_at and now - self.static_attempted_at < retry_after:
             return
+        async with heavy_operation("world static"):
+            await self._load_static_data(now)
+
+    async def _load_static_data(self, now):
         self.static_attempted_at = now
-        results = await asyncio.gather(
-            self._json(BROWSE_REGIONS_URL),
-            self._json(BROWSE_CHALLENGES_URL),
-            self._json(BROWSE_DICTIONARY_URL),
-            self._json(SOL_NODES_URL),
-            self._text(SP_INCURSIONS_URL),
-            return_exceptions=True,
-        )
+        results = []
+        # Decode one export at a time, not five simultaneous response buffers.
+        for url, text in ((BROWSE_REGIONS_URL, False), (BROWSE_CHALLENGES_URL, False),
+                          (BROWSE_DICTIONARY_URL, False), (SOL_NODES_URL, False), (SP_INCURSIONS_URL, True)):
+            try:
+                results.append(await (self._text(url) if text else self._json(url)))
+            except Exception as exc:
+                results.append(exc)
         if isinstance(results[0], dict):
             self.regions = results[0]
         if isinstance(results[1], dict):

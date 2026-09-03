@@ -8,7 +8,7 @@ The service deliberately keeps two very different signals separate:
 * Warframe.market auctions contain exact rolls and current asking prices.
   They are useful comparables, but an asking price is not proof of a sale.
 
-Every official weekly snapshot is archived on disk.  DE only exposes the
+Official weekly snapshots are archived within a 32 MiB disk budget. DE only exposes the
 latest week at the public URL, so the bot never claims that one fresh download
 is years of history; history accumulates honestly as snapshots are collected
 or imported later.
@@ -33,6 +33,8 @@ import aiohttp
 
 from rate_limiter import AsyncRateLimiter
 from riven_roll_rules import evaluate_curated_roll
+from auction_pool import AuctionPool
+from workload import heavy_operation
 
 
 OFFICIAL_WEEKLY_URLS = {
@@ -52,6 +54,7 @@ HEADERS = {
 }
 CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
 AUCTION_CACHE_SECONDS = 10 * 60
+HISTORY_BUDGET_BYTES = 32 * 1024 * 1024
 FLIP_INDEX_INTERVAL_SECONDS = 15 * 60
 FLIP_INDEX_MAX_AGE_SECONDS = 30 * 60
 FLIP_INDEX_VERSION = 2
@@ -894,7 +897,15 @@ class RivenMarketService:
             envelope = {"fetched_at": fetched_at, "platform": self.platform, "rows": weekly}
             day = datetime.now(UTC).date().isoformat()
             self._write_json(self.data_dir / "latest.json", envelope)
-            self._write_json(self.history_dir / f"{day}.json", envelope)
+            history_path = self.history_dir / f"{day}.json"
+            archive_bytes = sum(path.stat().st_size for path in self.history_dir.glob("*.json"))
+            old_bytes = history_path.stat().st_size if history_path.exists() else 0
+            new_bytes = len(json.dumps(envelope, ensure_ascii=False, indent=2).encode("utf-8"))
+            if archive_bytes - old_bytes + new_bytes <= HISTORY_BUDGET_BYTES:
+                self._write_json(history_path, envelope)
+            else:
+                # Preserve existing history. Never fill the disk or delete user evidence.
+                print("[riven-history] 32 MiB archive budget reached; new archiving paused. Latest prices still update.")
             self._write_json(self.data_dir / "weapons.json", {"fetched_at": fetched_at, "rows": weapons})
             self.weekly_rows = weekly
             self.weapons = weapons
@@ -1037,13 +1048,20 @@ class RivenMarketService:
         auctions = ((envelope.get("payload") or {}).get("auctions") or []) if isinstance(envelope, dict) else []
         if not isinstance(auctions, list):
             raise RuntimeError("Warframe.market's auction search returned an unexpected format")
-        self._auction_cache[weapon_slug] = (time.time(), auctions)
+        now = time.time()
+        for key, (stamp, _) in list(self._auction_cache.items()):
+            if now - stamp > AUCTION_CACHE_SECONDS:
+                self._auction_cache.pop(key, None)
+        self._auction_cache.pop(weapon_slug, None)
+        self._auction_cache[weapon_slug] = (now, auctions)
+        while len(self._auction_cache) > 4:
+            self._auction_cache.pop(next(iter(self._auction_cache)))
         return auctions
 
     async def auctions_across_market(
         self,
         session: aiohttp.ClientSession,
-    ) -> tuple[dict[str, list[dict]], int]:
+    ) -> tuple[AuctionPool, int]:
         """Fetch a broad resale pool across all weapons using stat searches.
 
         Warframe.market caps a search response at 500 rows. Querying every
@@ -1072,25 +1090,21 @@ class RivenMarketService:
                 return [], True
 
         searches = [(slug, sort_by) for slug in positive_slugs for sort_by in ("price_asc", "price_desc")]
-        batches = await asyncio.gather(*(one(slug, sort_by) for slug, sort_by in searches))
-        failures = sum(1 for _rows, failed in batches if failed)
-        if failures == len(searches):
-            raise RuntimeError("Every cross-weapon Riven auction search failed")
-        unique: dict[str, dict] = {}
-        for rows, _failed in batches:
-            for auction in rows:
-                auction_id = str(auction.get("id") or "")
-                if auction_id:
-                    unique[auction_id] = auction
-        grouped: dict[str, list[dict]] = {}
-        for auction in unique.values():
-            item = auction.get("item") or {}
-            if str(item.get("type") or "riven").casefold() != "riven":
-                continue
-            weapon_slug = str(item.get("weapon_url_name") or "").casefold().strip()
-            if weapon_slug:
-                grouped.setdefault(weapon_slug, []).append(auction)
-        return grouped, failures
+        pool = AuctionPool()
+        failures = 0
+        try:
+            for offset in range(0, len(searches), 2):
+                batches = await asyncio.gather(*(one(slug, sort_by) for slug, sort_by in searches[offset:offset + 2]))
+                for rows, failed in batches:
+                    failures += int(failed)
+                    pool.add(rows)
+                rows = batches = None
+            if failures == len(searches):
+                raise RuntimeError("Every cross-weapon Riven auction search failed")
+            return pool, failures
+        except BaseException:
+            pool.close()
+            raise
 
     async def scan_flips(
         self,
@@ -1135,12 +1149,9 @@ class RivenMarketService:
         if weapon_limit is not None:
             selected = selected[:max(1, weapon_limit)]
 
-        # Do not create hundreds of simultaneous HTTP sessions. The request
-        # limiter controls rate; this semaphore also bounds waiting sockets and
-        # lets relic pricing continue alongside a long full-market scan.
-        workers = asyncio.Semaphore(4)
+        # Decode and score one family at a time; all families are still visited.
         failed_families = 0
-        market_auctions: dict[str, list[dict]] | None = None
+        market_auctions = None
         loop = asyncio.get_running_loop()
 
         async def inspect(
@@ -1156,8 +1167,7 @@ class RivenMarketService:
                 auctions = market_auctions.get(slug, [])
             else:
                 try:
-                    async with workers:
-                        auctions = await self.auctions_for(slug, force=force_auctions, session=session)
+                    auctions = await self.auctions_for(slug, force=force_auctions, session=session)
                 except Exception:  # noqa: BLE001 - one weapon must not abort the market scan
                     failed_families += 1
                     return []
@@ -1193,9 +1203,17 @@ class RivenMarketService:
         async with self._flip_scan_lock:
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(headers=HEADERS, timeout=timeout) as session:
-                if weapon_limit is None:
-                    market_auctions, failed_families = await self.auctions_across_market(session)
-                batches = await asyncio.gather(*(inspect(family, weekly, session) for family, weekly in selected))
+                try:
+                    if weapon_limit is None:
+                        market_auctions, failed_families = await self.auctions_across_market(session)
+                    # Decode/score one family at a time rather than queuing every
+                    # family's complete auction list into the executor at once.
+                    batches = []
+                    for family, weekly in selected:
+                        batches.append(await inspect(family, weekly, session))
+                finally:
+                    if isinstance(market_auctions, AuctionPool):
+                        market_auctions.close()
             deals = [deal for batch in batches for deal in batch]
         self.flip_index_failures = failed_families
         deals.sort(
@@ -1211,6 +1229,12 @@ class RivenMarketService:
         return (deals if result_limit is None else deals[:result_limit]), len(selected)
 
     async def refresh_flip_index(self, *, force: bool = False) -> tuple[list[RivenDeal], int, float]:
+        if not force and self.flip_index_at and time.time() - self.flip_index_at < FLIP_INDEX_MAX_AGE_SECONDS:
+            return list(self.flip_deals), self.flip_index_scanned, self.flip_index_at
+        async with heavy_operation("riven scan"):
+            return await self._refresh_flip_index(force=force)
+
+    async def _refresh_flip_index(self, *, force: bool = False) -> tuple[list[RivenDeal], int, float]:
         """Build and persist a complete curated deal index for every family."""
         if (
             not force

@@ -57,6 +57,7 @@ from discord_world_state import (
 )
 from local_env import load_local_env
 from discord_automation import RefreshController, GuildAutomation, SingleRefreshOutput
+from memory_usage import log_memory, monitor_memory
 from riven_market import (
     RivenDeal, RivenMarketService, auction_price, display_stat, find_riven_deals, format_roll_stat,
     disposition_band, fmt_platinum, human_age,
@@ -117,8 +118,9 @@ RIVEN_TOP_CHOICES = [
 class RelicBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        super().__init__(command_prefix="!", intents=intents)
+        super().__init__(command_prefix="!", intents=intents, max_messages=100)
         self._provisioning_task = None
+        self._memory_task = None
 
     async def on_ready(self):
         print(f"Logged in as {self.user}. Automatically preparing channels and relic refresh.")
@@ -132,6 +134,8 @@ class RelicBot(commands.Bot):
         automation.remove(guild.id)
 
     async def setup_hook(self):
+        log_memory("bot setup")
+        self._memory_task = asyncio.create_task(monitor_memory())
         state.load_relics()
         if not companion_vision.configured:
             print("[companion] OPENAI_API_KEY is not set; automatic screenshot recognition is disabled.")
@@ -141,6 +145,9 @@ class RelicBot(commands.Bot):
         riven_market.start_background_index()
 
     async def close(self):
+        if self._memory_task is not None:
+            self._memory_task.cancel()
+            await asyncio.gather(self._memory_task, return_exceptions=True)
         if self._provisioning_task is not None:
             self._provisioning_task.cancel()
             await asyncio.gather(self._provisioning_task, return_exceptions=True)

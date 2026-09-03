@@ -591,17 +591,11 @@ class LiveListManager:
             refinement = self._config(guild_id, key).get("refinement", "radiant")
             refinements_needed.setdefault(refinement, []).append(key)
 
-        base_rows_by_refinement: dict[str, list[dict]] = {}
-        for refinement in refinements_needed:
+        for refinement, keys in refinements_needed.items():
             try:
-                base_rows_by_refinement[refinement] = await self.base_online_rows_async(refinement)
+                base_rows = await self.base_online_rows_async(refinement)
             except Exception as exc:  # noqa: BLE001
                 self.last_errors.append(f"{refinement}: {exc}")
-                continue
-
-        for refinement, keys in refinements_needed.items():
-            base_rows = base_rows_by_refinement.get(refinement)
-            if base_rows is None:
                 continue
             for key in keys:
                 try:
