@@ -1,0 +1,5 @@
+# Bot runtime only; desktop packaging tools are not needed on the host.
+requests>=2.31.0
+aiohttp>=3.9.0
+discord.py>=2.4.0
+tzdata>=2025.2

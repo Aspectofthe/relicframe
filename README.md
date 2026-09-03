@@ -10,7 +10,7 @@ The application lives in `relicframe/`. See
 Install dependencies from the repository root:
 
 ```sh
-python -m pip install -r relicframe/requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 Set `DISCORD_BOT_TOKEN` in the hosting provider's secret/environment settings.
@@ -19,8 +19,16 @@ Do not place tokens in this repository or in the start command.
 Start the bot from the repository root:
 
 ```sh
-cd relicframe && python -u bot.py
+python -u main.py
 ```
+
+On Bot-Hosting's Python template, set `STARTUP_FILE` to `main.py` and leave
+the working directory at the repository root. Its default startup command
+will install the root `requirements.txt` automatically. The root launcher
+switches into `relicframe/` before starting the bot, preserving data paths.
+Use the repository-root `main.py`, not `relicframe/main.py` (the desktop UI).
+After pulling a code update, restart the deployment. A restart alone may
+not fetch new GitHub commits; use the host's pull/redeploy action first.
 
 Keep only one production copy running to avoid duplicate Discord messages.
 The root reference files `ALL weapons.txt` and `Untitled.txt` retain their

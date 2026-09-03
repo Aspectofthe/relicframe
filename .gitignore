@@ -4,6 +4,8 @@
 !/.gitignore
 !/.gitattributes
 !/README.md
+!/main.py
+!/requirements.txt
 !/ALL weapons.txt
 !/Untitled.txt
 !/relicframe/
