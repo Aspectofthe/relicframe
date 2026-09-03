@@ -18,6 +18,7 @@ The executable is C#/.NET 10, using Discord.Net 3.20.1. It does not run Python, 
 - An offline `RelicFrame.Tools` importer for DiscordChatExporter HTML/JSON that preserves source files and produces appraiser-compatible private JSONL. It is separate from the always-on bot so export processing does not consume hosting RAM.
 - A test-guild Discord preview with immediate deferred acknowledgement, two calculation workers, a bounded queue, and a separate fast status command.
 - Test-guild world feeds: automatic `WARFRAME LIVE` setup, the requested visible channel names, persistent role buttons, all base/Arbitration/fissure-tier roles, one-minute background updates, per-channel replacement pings, Cascade split by normal/Steel Path, `Lvl <grade> tier` fissure labels, and fresh official-DE fissure fallback when the translated source is stale.
+- Managed board cleanup retains the current board/ping and removes older messages authored by the bot. It never purges user-authored messages; manually selected relic-panel channels are not cleaned.
 
 The tests contain 2,845 synthetic cross-language cases, plus injected HTTP/lifecycle/storage tests. Passing these tests does not certify the unported features or real Discord operation.
 

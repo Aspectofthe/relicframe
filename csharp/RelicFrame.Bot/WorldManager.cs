@@ -113,7 +113,7 @@ internal sealed class WorldManager : IAsyncDisposable
                 else if ((role.Name != definition.Name || !role.IsMentionable) && role is SocketRole socketRole) await socketRole.ModifyAsync(p => { p.Name = definition.Name; p.Mentionable = true; });
                 state.Roles[key] = role.Id;
             }
-            Save(); await UpdateRoleMenusAsync(guild, state); return $"Configured {Channels.Count} live channels and {Roles.Count} opt-in roles in {CategoryName}.";
+            Save(); await UpdateRoleMenusAsync(guild, state); return $"Configured {Channels.Count} live channels and {Roles.Count} opt-in roles in {CategoryName}. Old messages authored by this bot are removed as each managed board refreshes; user messages are preserved.";
         }
         finally { setup.Release(); }
     }
@@ -139,6 +139,7 @@ internal sealed class WorldManager : IAsyncDisposable
             }
             else await message.ModifyAsync(p => { p.Content = content; p.Components = components.Build(); p.AllowedMentions = AllowedMentions.None; });
         }
+        await DiscordCleanup.BotMessagesAsync(channel, guild.CurrentUser.Id, state.RoleMenuMessages.ToArray());
         Save();
     }
     private async Task HandleButtonAsync(SocketMessageComponent interaction)
@@ -186,7 +187,7 @@ internal sealed class WorldManager : IAsyncDisposable
             var failures = new List<string>();
             foreach (var key in Channels.Keys.Where(k => k != "world-pings"))
             {
-                try { await UpsertBoardAsync(guild, state, key, WorldRender.Build(key, data, schedule)); }
+                try { await UpsertBoardAsync(guild, state, key, WorldRender.Build(key, data, schedule), guild.CurrentUser.Id, state.PingMessages.GetValueOrDefault(key)); }
                 catch (Exception e) when (e is Discord.Net.HttpException or InvalidOperationException) { failures.Add($"{key}: {e.GetType().Name}"); }
             }
             try { await SendNewPingsAsync(guild, state, WorldRender.Signatures(data, schedule)); }
@@ -196,15 +197,19 @@ internal sealed class WorldManager : IAsyncDisposable
         finally { refresh.Release(); }
     }
     private static Embed Render(WorldBoard board) => new EmbedBuilder().WithTitle(board.Title).WithDescription(board.Description).WithColor(new Color(board.Color)).Build();
-    private static async Task UpsertBoardAsync(SocketGuild guild, WorldGuildState state, string key, WorldBoard[] boards)
+    private static async Task UpsertBoardAsync(SocketGuild guild, WorldGuildState state, string key, WorldBoard[] boards, ulong botUserId, ulong pingMessageId)
     {
         if (boards.Length == 0) return; var saved = state.Channels[key]; var channel = guild.GetTextChannel(saved.ChannelId) ?? throw new InvalidOperationException("Saved feed channel missing.");
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0', boards.SelectMany(b => new[] { b.Title, b.Description, b.Color.ToString() })))));
-        if (hash == saved.RenderHash && saved.MessageId != 0 && await channel.GetMessageAsync(saved.MessageId) is not null) return;
-        var embeds = boards.Take(10).Select(Render).ToArray(); var existing = saved.MessageId == 0 ? null : await channel.GetMessageAsync(saved.MessageId) as IUserMessage;
-        if (existing is null) { var sent = await channel.SendMessageAsync(embeds: embeds, allowedMentions: AllowedMentions.None); saved.MessageId = sent.Id; }
-        else await existing.ModifyAsync(p => { p.Embeds = embeds; p.AllowedMentions = AllowedMentions.None; });
-        saved.RenderHash = hash;
+        var existing = saved.MessageId == 0 ? null : await channel.GetMessageAsync(saved.MessageId) as IUserMessage;
+        if (hash != saved.RenderHash || existing is null)
+        {
+            var embeds = boards.Take(10).Select(Render).ToArray();
+            if (existing is null) { var sent = await channel.SendMessageAsync(embeds: embeds, allowedMentions: AllowedMentions.None); saved.MessageId = sent.Id; }
+            else await existing.ModifyAsync(p => { p.Embeds = embeds; p.AllowedMentions = AllowedMentions.None; });
+            saved.RenderHash = hash;
+        }
+        await DiscordCleanup.BotMessagesAsync(channel, botUserId, saved.MessageId, pingMessageId);
     }
     private async Task SendNewPingsAsync(SocketGuild guild, WorldGuildState state, IReadOnlyDictionary<string, string[]> next)
     {
@@ -236,7 +241,7 @@ internal sealed class WorldManager : IAsyncDisposable
     public async Task<string> CommandAsync(SocketSlashCommand command, CancellationToken ct, CancellationToken lifetime)
     {
         var name = command.Data.Options.Single().Name;
-        if (name == "help") return "The C# world preview creates WARFRAME LIVE with bot-guide, role-pings, world-cycles, warframe-news and the remaining channels without the old world- prefix. It refreshes each minute and only pings new signatures. Manage Server is required for setup/start/stop/manual refresh.";
+        if (name == "help") return "The C# world preview creates WARFRAME LIVE with bot-guide, role-pings, world-cycles, warframe-news and the remaining channels without the old world- prefix. It refreshes each minute and only pings new signatures. Managed channels keep the current bot board/ping and remove older bot-authored messages without deleting user posts. Manage Server is required for setup/start/stop/manual refresh.";
         if (name == "status") return $"World feeds: {Status}; last success {(LastSuccess is { } last ? $"<t:{last.ToUnixTimeSeconds()}:R>" : "never")}; schedule entries {schedule.Length}.";
         if (command.User is not SocketGuildUser user || !user.GuildPermissions.ManageGuild) return "Manage Server permission is required.";
         var guild = bot.GetGuild(targetGuild) ?? throw new InvalidOperationException("Test guild unavailable.");

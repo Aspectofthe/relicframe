@@ -7,6 +7,7 @@ internal sealed record RelicPanelGuildState
     public ulong ChannelId { get; set; }
     public ulong MessageId { get; set; }
     public RelicPanelOptions Options { get; set; } = new();
+    public bool CleanupBotMessages { get; set; }
 }
 internal sealed record RelicPanelStore
 {
@@ -45,7 +46,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             channel = guild.TextChannels.FirstOrDefault(c => c.Name == "relic-deals");
             channel ??= await guild.CreateTextChannelAsync("relic-deals", p => { p.CategoryId = category?.Id; p.Topic = "Live Radiant relic value and risk rankings"; });
         }
-        state.ChannelId = channel.Id; state.Options ??= new(); Save();
+        state.ChannelId = channel.Id; state.CleanupBotMessages = selected is null && channel.Name == "relic-deals"; state.Options ??= new(); Save();
         await market.StartAsync(false, lifetime); Start(lifetime); await UpdateAsync(ct);
         return $"Relic panel configured in <#{channel.Id}>. Default: Radiant, Best Overall, best of online/all sellers; panel render every minute.";
     }
@@ -94,6 +95,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             var old = state.MessageId == 0 ? null : await channel.GetMessageAsync(state.MessageId) as IUserMessage;
             if (old is null) { var sent = await channel.SendMessageAsync(embed: embed, allowedMentions: AllowedMentions.None); state.MessageId = sent.Id; }
             else await old.ModifyAsync(p => { p.Embed = embed; p.AllowedMentions = AllowedMentions.None; });
+            if (state.CleanupBotMessages) await DiscordCleanup.BotMessagesAsync(channel, guild.CurrentUser.Id, state.MessageId);
             status = $"ready; one-minute render; {state.Options.Refinement}/{state.Options.Sort}"; Save();
         }
         finally { update.Release(); }
