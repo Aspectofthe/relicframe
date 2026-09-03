@@ -1,0 +1,46 @@
+# This workspace contains private exports and many historical copies.
+# Track only the application and explicitly approved reference files.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/ALL weapons.txt
+!/Untitled.txt
+!/relicframe/
+
+/relicframe/*
+!/relicframe/*.py
+!/relicframe/requirements.txt
+!/relicframe/README.md
+!/relicframe/.env.example
+!/relicframe/tests/
+/relicframe/tests/*
+!/relicframe/tests/*.py
+!/relicframe/data/
+/relicframe/data/*
+!/relicframe/data/relics_from_official_data.csv
+!/relicframe/data/rivens/
+/relicframe/data/rivens/*
+!/relicframe/data/rivens/attributes.json
+!/relicframe/data/rivens/roll_rules.json
+!/relicframe/data/rivens/weapon_variants.json
+!/relicframe/data/rivens/weapons.json
+
+# Never commit secrets, runtime state, or local development environments.
+**/.env
+**/.env.*
+!relicframe/.env.example
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+**/.cache/
+**/.idea/
+**/*.log
+**/*.pem
+**/*.key
+**/discord_world_state.json
+**/discord_list_state.json
+**/trade_chat_offers.jsonl
+**/companion_sales/
+**/companion_current_market/
