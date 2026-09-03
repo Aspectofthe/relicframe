@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 
 import discord
+from bot_guide import guide_embeds
 
 from world_state import (
     DEFAULT_ARBITRATION_PATH,
@@ -30,6 +31,7 @@ MESSAGE_VERIFY_SECONDS = 10 * 60
 STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "discord_world_state.json")
 
 CHANNELS = {
+    "bot-guide": "How to use RelicFrame and every feature",
     "world-pings": "Choose your notification roles",
     "world-cycles": "Environments",
     "world-news": "News and KinePage",
@@ -46,11 +48,19 @@ CHANNELS = {
     "world-void-storms": "Railjack Void Storms",
     "world-invasions": "Active invasions",
     "world-arbitration": "Current and upcoming Arbitrations",
-    "world-cascade": "Void Cascade fissures and Arbitration alerts",
+    "world-cascade": "Normal and Steel Path Void Cascade fissures",
+}
+
+# Keep persisted keys/IDs stable while migrating visible channel names in place.
+CHANNEL_NAMES = {
+    key: {"world-cycles": "world-cycles", "world-news": "warframe-news",
+          "world-pings": "role-pings"}.get(key, key.removeprefix("world-"))
+    for key in CHANNELS
 }
 
 BASE_ROLES = {
-    "cascade": ("Void Cascade Ping", "🌊"),
+    "cascade": ("Normal Cascade Fissure Ping", "🌊"),
+    "steel_cascade": ("Steel Path Cascade Fissure Ping", "🌊"),
     "arbitration": ("Arbitration Ping", "⚖️"),
     "alerts": ("Alerts Ping", "🚨"),
     "events": ("Events Ping", "🎉"),
@@ -87,6 +97,7 @@ FEATURE_EMOJI = {
 }
 
 ROLE_FEATURE_EMOJI = {
+    "steel_cascade": "cascade",
     "cascade": "cascade",
     "arbitration": "arbitration",
     "fissures": "fissure",
@@ -143,6 +154,7 @@ TIER_ROLES = {
 ROLES = {**BASE_ROLES, **TIER_ROLES}
 
 ROLE_CHANNEL = {
+    "steel_cascade": "world-cascade",
     "cascade": "world-cascade",
     "arbitration": "world-arbitration",
     "alerts": "world-alerts",
@@ -620,19 +632,22 @@ def cascade_embed(
     entries, data: dict, now: float | None = None, icons: dict[str, str] | None = None,
 ) -> discord.Embed:
     now = time.time() if now is None else now
-    cascades = [f for f in active_items(data["world"].get("fissures"), now) if f.get("missionType") == "Void Cascade"]
-    fissure_lines = _fissure_lines(cascades, entries, icons)
-    upcoming = [entry for entry in entries if entry.activation > now and entry.mission_type.lower() == "void cascade"][:8]
-    arby_lines = [f"{_ts(entry.activation, 'f')} · {entry.location} · {entry.tier} tier" for entry in upcoming]
+    cascades = [f for f in active_items(data["world"].get("fissures"), now)
+                if str(f.get("missionType", "")).casefold() == "void cascade" and not f.get("isStorm")]
     empty = "Live mission source is delayed; retrying automatically." if data.get("mission_data_stale") else "None active."
-    desc = "**Active Void Cascade fissures**\n" + _lines(fissure_lines, empty)
-    desc += "\n\n**Upcoming Void Cascade Arbitrations**\n" + _lines(arby_lines, "None in the loaded schedule.")
+    desc = "**Normal Void Cascade fissures**\n" + _lines(
+        _fissure_lines([f for f in cascades if not f.get("isHard")], entries, icons), empty)
+    desc += "\n\n**Steel Path Void Cascade fissures**\n" + _lines(
+        _fissure_lines([f for f in cascades if f.get("isHard")], entries, icons), empty)
+    desc += "\n\nChoose normal and/or Steel Path Cascade notifications in **#role-pings**."
     return _embed(f"{_icon(icons, 'cascade')} Void Cascade Watch", desc, 0x00A8CC)
 
 
 def build_channel_embeds(
     channel_key: str, data: dict, arbitration_entries, icons: dict[str, str] | None = None,
 ) -> list[discord.Embed]:
+    if channel_key == "bot-guide":
+        return guide_embeds()
     if channel_key == "world-cycles":
         embeds = [cycles_embed(data)]
     elif channel_key == "world-news":
@@ -687,15 +702,17 @@ def notification_signatures(data: dict, arbitration_entries, now: float | None =
     normal_fissures = [f for f in fissures if not f.get("isStorm") and not f.get("isHard")]
     steel_fissures = [f for f in fissures if not f.get("isStorm") and bool(f.get("isHard"))]
     void_storms = [f for f in fissures if bool(f.get("isStorm"))]
-    cascade_ids = [str(f.get("id")) for f in fissures if f.get("missionType") == "Void Cascade"]
-    if current_arb and current_arb.mission_type.lower() == "void cascade":
-        cascade_ids.append(f"arbitration:{current_arb.activation}")
+    cascade_ids = [str(f.get("id")) for f in normal_fissures
+                   if str(f.get("missionType", "")).casefold() == "void cascade"]
+    steel_cascade_ids = [str(f.get("id")) for f in steel_fissures
+                         if str(f.get("missionType", "")).casefold() == "void cascade"]
     baro = world.get("voidTrader") or {}
     archimedeas = world.get("archimedeas") or []
     steel = current_sp_incursions(data.get("sp_incursions") or {}, now)
     bounty = data.get("bounty") or {}
     signatures = {
         "cascade": sorted(cascade_ids),
+        "steel_cascade": sorted(steel_cascade_ids),
         "arbitration": [str(current_arb.activation)] if current_arb else [],
         "alerts": sorted(str(x.get("id")) for x in active_items(world.get("alerts"), now)),
         "events": sorted(str(x.get("id")) for x in active_items(world.get("events"), now)),
@@ -737,7 +754,8 @@ def notification_signatures(data: dict, arbitration_entries, now: float | None =
 
 
 PING_TEXT = {
-    "cascade": "A Void Cascade is active now.",
+    "cascade": "A normal Void Cascade fissure is active now.",
+    "steel_cascade": "A Steel Path Void Cascade fissure is active now.",
     "arbitration": "A new Arbitration rotation is active.",
     "alerts": "A new Warframe alert is active.",
     "events": "A new Warframe event is active.",
@@ -820,6 +838,8 @@ class WorldStateManager:
         self.last_success: float | None = None
         self._task: asyncio.Task | None = None
         self._refresh_lock = asyncio.Lock()
+        self._setup_locks = {}
+        self._setting_up_guilds = set()
         self._unavailable_guilds_logged: set[int] = set()
 
     def _save(self):
@@ -910,6 +930,8 @@ class WorldStateManager:
                         print(f"[world-state] ignoring invalid saved server id: {saved_guild_id!r}")
             guild_errors = []
             for target in targets:
+                if guild_id is None and target in getattr(self, "_setting_up_guilds", set()):
+                    continue  # do not render partially provisioned channel/role state
                 get_guild = getattr(getattr(self, "bot", None), "get_guild", None)
                 if callable(get_guild) and get_guild(target) is None:
                     logged = getattr(self, "_unavailable_guilds_logged", set())
@@ -935,8 +957,16 @@ class WorldStateManager:
                     raise RuntimeError(self.last_error)
             return self.latest
 
-    async def setup_guild(self, guild: discord.Guild) -> str:
-        removed_guilds = self._prune_unavailable_guilds(guild.id)
+    async def setup_guild(self, guild: discord.Guild, *, automatic=False) -> str:
+        async with self._setup_locks.setdefault(guild.id, asyncio.Lock()):
+            self._setting_up_guilds.add(guild.id)
+            try:
+                return await self._setup_guild(guild, automatic=automatic)
+            finally:
+                self._setting_up_guilds.discard(guild.id)
+
+    async def _setup_guild(self, guild: discord.Guild, *, automatic=False) -> str:
+        removed_guilds = [] if automatic else self._prune_unavailable_guilds(guild.id)
         cfg = self._guild(guild.id)
         category = guild.get_channel(cfg.get("category_id") or 0)
         if not isinstance(category, discord.CategoryChannel):
@@ -948,13 +978,17 @@ class WorldStateManager:
         created_channels = []
         channel_cfg = cfg.setdefault("channels", {})
         for key, topic in CHANNELS.items():
+            name = CHANNEL_NAMES[key]
             saved = channel_cfg.setdefault(key, {"channel_id": None, "message_id": None})
             channel = guild.get_channel(saved.get("channel_id") or 0)
             if not isinstance(channel, discord.TextChannel):
-                channel = discord.utils.get(category.text_channels, name=key)
+                channel = (discord.utils.get(category.text_channels, name=name)
+                           or discord.utils.get(category.text_channels, name=key))
             if channel is None:
-                channel = await guild.create_text_channel(key, category=category, topic=topic, reason="RelicFrame world-state feed")
-                created_channels.append(key)
+                channel = await guild.create_text_channel(name, category=category, topic=topic, reason="RelicFrame world-state feed")
+                created_channels.append(name)
+            elif channel.name != name:
+                await channel.edit(name=name, topic=topic, reason="RelicFrame channel name migration")
             saved["channel_id"] = channel.id
 
         role_cfg = cfg.setdefault("roles", {})
@@ -962,8 +996,12 @@ class WorldStateManager:
             role = guild.get_role(role_cfg.get(key) or 0)
             if role is None:
                 role = discord.utils.get(guild.roles, name=name)
+            if role is None and key == "cascade":
+                role = discord.utils.get(guild.roles, name="Void Cascade Ping")
             if role is None:
                 role = await guild.create_role(name=name, mentionable=True, reason="RelicFrame opt-in world-state ping")
+            elif key == "cascade" and role.name == "Void Cascade Ping":
+                await role.edit(name=name, reason="Normal Cascade fissure notification role")
             role_cfg[key] = role.id
 
         self._save()

@@ -45,10 +45,11 @@ The included official relic file is loaded automatically from
 - `/relics compare` - compares Intact, Exceptional, Flawless, and Radiant.
 - `/relics buyn` - sweeps real seller quantities to calculate the cost and outcome distribution for buying N relics.
 - `/relics refresh` - starts or refreshes the live market layer, with optional recurring updates and channel selection.
+- `/relics stop` - admin kill switch for the shared relic refresh and pricing worker; immediately restart with new settings.
 - `/relics setup-list` - creates persistent live-list channels that update existing messages.
 - `/relics status` and `/relics help` - data freshness and in-Discord guidance.
 - `/world setup` - creates the Warframe live-feed category, its channels, and opt-in notification roles.
-- `/world arbitration` and `/world cascade` - quick current/upcoming mission lookups without opening the feed channels.
+- `/world arbitration` - current/upcoming Arbitration lookups; `/world cascade` - normal and Steel Path Cascade fissures only.
 - `/companion appraise` - estimates a two-imprint set from free manual species/pattern/build/color fields, or identifies those traits from a screenshot when optional automatic vision is configured.
 - `/companion guide` - screenshot instructions, inherited-trait rules, color tiers, and example price ranges.
 - `/riven price` - real weekly completed-trade baselines plus current live Riven asks for one weapon.
@@ -76,7 +77,18 @@ The opt-in panel provides general roles plus per-tier roles for Arbitrations,
 normal Fissures, Steel Path Fissures, and Void Storms. Ping notifications are
 combined and rolled per channel, leaving only the newest bot ping visible.
 
-See [docs/DISCORD_GUIDE.md](docs/DISCORD_GUIDE.md) for the user-facing guide.
+The bot automatically creates `bot-guide`, `refresh`, WARFRAME LIVE and THE LIST
+on startup/server join. It renames existing feed channels in place: world-cycles
+stays, world-news becomes warframe-news, world-pings becomes role-pings, and the
+remaining feed names lose world-. Normal and Steel Path Cascade have separate
+notification roles. The old Cascade role is reused for normal Cascade.
+
+Relic refresh defaults to Radiant, forced catalog refresh on worker startup,
+one minute between cycles, with output in each server's refresh channel.
+Use the red stop button or `/relics stop` (Manage Server required) to stop the
+shared pricing worker, then `/relics refresh auto:Start` to change the settings.
+Reconnects will not override a stop, but a process restart restores the defaults.
+Read `bot-guide` in Discord or [the hosting guide](../README.md) for setup details.
 
 ## Webhook mode
 

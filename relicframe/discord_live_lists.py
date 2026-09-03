@@ -282,6 +282,8 @@ class LiveListManager:
         self.state = state
         self.data = _load_state()
         self.last_errors: list[str] = []
+        self._setup_locks = {}
+        self._setting_up_guilds = set()
         self._unavailable_guilds_logged: set[int] = set()
 
     def _save(self):
@@ -337,8 +339,16 @@ class LiveListManager:
         embed.set_footer(text=f"Waiting for first price refresh · {refinement.capitalize()}")
         return embed
 
-    async def setup_guild(self, guild: discord.Guild) -> str:
-        removed_guilds = self._prune_unavailable_guilds(guild.id)
+    async def setup_guild(self, guild: discord.Guild, *, automatic=False) -> str:
+        async with self._setup_locks.setdefault(guild.id, asyncio.Lock()):
+            self._setting_up_guilds.add(guild.id)
+            try:
+                return await self._setup_guild(guild, automatic=automatic)
+            finally:
+                self._setting_up_guilds.discard(guild.id)
+
+    async def _setup_guild(self, guild: discord.Guild, *, automatic=False) -> str:
+        removed_guilds = [] if automatic else self._prune_unavailable_guilds(guild.id)
         existing_category = discord.utils.get(guild.categories, name=LIST_CATEGORY_NAME)
         category = existing_category or await guild.create_category(LIST_CATEGORY_NAME, reason="RelicFrame live relic lists")
         created = []
@@ -606,6 +616,8 @@ class LiveListManager:
         for guild_id in list(self.data.get("guilds", {})):
             try:
                 parsed_guild_id = int(guild_id)
+                if parsed_guild_id in getattr(self, "_setting_up_guilds", set()):
+                    continue
                 get_guild = getattr(self.bot, "get_guild", None)
                 if callable(get_guild) and get_guild(parsed_guild_id) is None:
                     if parsed_guild_id not in self._unavailable_guilds_logged:

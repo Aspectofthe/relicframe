@@ -125,6 +125,10 @@ class BotState:
             )
             try:
                 await market.start(self.relics, force_catalog_refresh=force_catalog_refresh, progress_cb=progress_cb)
+            except asyncio.CancelledError:
+                # A refresh kill must also close a partially bootstrapped client.
+                await market.stop()
+                raise
             except Exception as e:  # noqa: BLE001
                 self._last_error = str(e)
                 await market.stop()

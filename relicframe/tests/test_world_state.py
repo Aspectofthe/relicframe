@@ -349,7 +349,8 @@ class TestDiscordWorldRendering(unittest.TestCase):
 
     def test_cascade_notification_includes_fissure(self):
         signatures = dws.notification_signatures(_sample_data(), [], now=1_800_000_000)
-        self.assertEqual(signatures["cascade"], ["f1"])
+        self.assertEqual(signatures["cascade"], [])
+        self.assertEqual(signatures["steel_cascade"], ["f1"])
 
     def test_fissures_are_split_into_general_and_tier_roles(self):
         signatures = dws.notification_signatures(_sample_data(), [], now=1_800_000_000)

@@ -34,6 +34,35 @@ Keep only one production copy running to avoid duplicate Discord messages.
 The root reference files `ALL weapons.txt` and `Untitled.txt` retain their
 expected paths relative to the application.
 
+## Automatic Discord setup
+
+On startup and server join, the bot creates/repairs `WARFRAME LIVE`, the seven
+`THE LIST` channels, a `bot-guide` explaining every feature, and `refresh`.
+Grant Manage Channels, Manage Roles, View Channel, Send Messages, Embed Links,
+and Read Message History; place the bot's role above its opt-in notification roles.
+Failures are logged per server; reconnects do not duplicate successful setup.
+
+Existing world-feed channels are renamed in place: `world-cycles` stays unchanged,
+`world-news` becomes `warframe-news`, `world-pings` becomes `role-pings`, and other
+feed names lose `world-`. Persisted channel/message IDs remain valid.
+Cascade now shows only normal and Steel Path fissures, with separate opt-in roles.
+The old Void Cascade Ping role is reused for normal Cascade (members are preserved).
+
+Default relic refresh is Radiant, force catalog refresh enabled, every one minute
+in each server's `refresh` channel. All servers share a single pricing worker;
+initial bootstrap may take minutes. Refresh messages are reused rather than piled up.
+Catalog forcing applies at worker initialization, not every snapshot cycle.
+
+An administrator with Manage Server can use `/relics stop`, the red **Stop relic
+refresh** button, or `/relics refresh auto:Stop` to cancel bootstrap, queued requests,
+and the relic pricing worker. Existing lists stay visible; world/Riven feeds continue.
+This is process-wide, affecting every server using this bot. Reconnects and joins
+do not undo a stop; a process restart restores automatic defaults.
+
+Restart immediately with `/relics refresh auto:Start` and your chosen refinement,
+catalog option, channel and interval. Per-list Filters controls are independent
+of the refresh settings. Manual refresh controls require Manage Server permission.
+
 ## Data and updates
 
 Git tracks source code, tests, the relic CSV, and public Riven reference data.

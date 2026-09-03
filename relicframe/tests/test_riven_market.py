@@ -2,6 +2,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -293,7 +294,8 @@ class TestRivenMarket(unittest.TestCase):
         self.assertEqual(result["variant_disposition"], 1.1)
 
     def test_discord_riven_group_registers_all_public_commands(self):
-        import bot
+        with patch("local_env.load_local_env", return_value=0):
+            import bot
 
         names = {command.name for command in bot.riven_group.commands}
         self.assertEqual(names, {"price", "top", "deals", "flips", "chatlog", "chatstats", "refresh", "guide"})

@@ -56,6 +56,7 @@ from discord_world_state import (
     WorldStateManager, arbitration_embed, cascade_embed,
 )
 from local_env import load_local_env
+from discord_automation import RefreshController, GuildAutomation, SingleRefreshOutput
 from riven_market import (
     RivenDeal, RivenMarketService, auction_price, display_stat, find_riven_deals, format_roll_stat,
     disposition_band, fmt_platinum, human_age,
@@ -117,18 +118,33 @@ class RelicBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         super().__init__(command_prefix="!", intents=intents)
+        self._provisioning_task = None
+
+    async def on_ready(self):
+        print(f"Logged in as {self.user}. Automatically preparing channels and relic refresh.")
+        if self._provisioning_task is None or self._provisioning_task.done():
+            self._provisioning_task = asyncio.create_task(automation.startup())
+
+    async def on_guild_join(self, guild):
+        await automation.startup([guild])
+
+    async def on_guild_remove(self, guild):
+        automation.remove(guild.id)
 
     async def setup_hook(self):
         state.load_relics()
         if not companion_vision.configured:
             print("[companion] OPENAI_API_KEY is not set; automatic screenshot recognition is disabled.")
         await self.tree.sync()
+        self.add_view(RefreshStopView())
         world_feed.start()
         riven_market.start_background_index()
 
     async def close(self):
-        _stop_auto_refresh()
-        await state.close()
+        if self._provisioning_task is not None:
+            self._provisioning_task.cancel()
+            await asyncio.gather(self._provisioning_task, return_exceptions=True)
+        await refresh_controller.stop()
         await world_feed.close()
         await riven_market.close()
         await super().close()
@@ -155,13 +171,6 @@ riven_trade_chat = RivenTradeChatLog(
 # the cooldown now needs to apply to only two of `/relics refresh`'s three
 # `auto` modes - stopping or checking status is free and shouldn't wait.
 _refresh_cooldowns: dict[int | None, float] = {}
-
-# The single running auto-refresh background task, if any. Config (channel,
-# interval, refinement, ...) lives in state.auto_refresh so it can be
-# inspected discord-agnostically from state.py / other commands; the Task
-# itself has to live here since it's tied to this bot's event loop.
-_auto_refresh_task: asyncio.Task | None = None
-
 
 def _cooldown_ready(guild_id: int | None) -> bool:
     last = _refresh_cooldowns.get(guild_id)
@@ -423,8 +432,9 @@ async def world_help(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🌐 RelicFrame live world feed",
         description=(
-            "An admin runs **`/world setup`** once. I create the **WARFRAME LIVE** category, "
-            "all feed channels, and grouped menus where everyone can choose their own ping roles.\n\n"
+            "On startup or joining a server I create the **WARFRAME LIVE** category automatically. "
+            "An admin can use **`/world setup`** to repair it. "
+            "Use #role-pings to choose your own notification roles.\n\n"
             "Feed messages refresh in place every minute, so channels do not fill with duplicate posts. "
             "Pings are only sent when a rotation or item is newly detected."
         ),
@@ -437,7 +447,7 @@ async def world_help(interaction: discord.Interaction):
             "`/world refresh` — refresh it now\n"
             "`/world status` — show freshness and schedule status\n"
             "`/world arbitration` — current and upcoming rotation\n"
-            "`/world cascade` — active fissures and upcoming Arbitrations"
+            "`/world cascade` — normal and Steel Path Cascade fissures"
         ),
         inline=False,
     )
@@ -479,7 +489,7 @@ async def world_arbitration(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@world_group.command(name="cascade", description="Show active Void Cascade fissures and upcoming Cascade Arbitrations.")
+@world_group.command(name="cascade", description="Show active normal and Steel Path Void Cascade fissures.")
 async def world_cascade(interaction: discord.Interaction):
     try:
         data = await _world_data_for_command(interaction)
@@ -1583,13 +1593,13 @@ async def _run_refresh(sendable, refinement_v: str, force_catalog_refresh: bool)
 
     already_running = state.live_market is not None
     if already_running:
-        progress_msg = await sendable.send(embed=discord.Embed(
+        progress_msg = await sendable.send(view=RefreshStopView(), embed=discord.Embed(
             title=f"🔄 Refreshing · {refinement_v.capitalize()}",
             description="Live market is already running - rebuilding from current data (instant).",
             color=fmt.BRAND_COLOR,
         ))
     else:
-        progress_msg = await sendable.send(embed=discord.Embed(
+        progress_msg = await sendable.send(view=RefreshStopView(), embed=discord.Embed(
             title=f"🔄 Starting live market · {refinement_v.capitalize()}",
             description=(
                 f"Bootstrapping full order books for **{n_relics}** relics and their rewards, "
@@ -1601,6 +1611,13 @@ async def _run_refresh(sendable, refinement_v: str, force_catalog_refresh: bool)
     loop = asyncio.get_running_loop()
     started = time.time()
     last_edit = {"t": 0.0}
+    progress_tasks = set()
+
+    async def edit_progress(embed):
+        try:
+            await progress_msg.edit(embed=embed)
+        except discord.HTTPException:
+            pass
 
     def progress_cb(done, total):
         # Called from the SAME event loop (live_market's bootstrap is a
@@ -1624,15 +1641,32 @@ async def _run_refresh(sendable, refinement_v: str, force_catalog_refresh: bool)
             ),
             color=fmt.BRAND_COLOR,
         )
-        asyncio.run_coroutine_threadsafe(progress_msg.edit(embed=embed), loop)
+        task = loop.create_task(edit_progress(embed))
+        progress_tasks.add(task)
+        task.add_done_callback(progress_tasks.discard)
 
     try:
         snap = await state.refresh(refinement_v, force_catalog_refresh=force_catalog_refresh, progress_cb=progress_cb)
+    except asyncio.CancelledError:
+        for task in progress_tasks:
+            task.cancel()
+        await asyncio.gather(*progress_tasks, return_exceptions=True)
+        try:
+            await progress_msg.edit(embed=discord.Embed(
+                title="🛑 Relic refresh stopped", description="An admin can restart with /relics refresh auto:Start.",
+                color=fmt.BRAND_COLOR), view=None)
+        except discord.HTTPException:
+            pass
+        raise
     except Exception as e:  # noqa: BLE001
         await progress_msg.edit(embed=discord.Embed(
             title="❌ Refresh failed", description=str(e), color=fmt.ERROR_COLOR,
         ))
         return False, str(e)
+    finally:
+        for task in progress_tasks:
+            task.cancel()
+        await asyncio.gather(*progress_tasks, return_exceptions=True)
 
     elapsed = time.time() - started
     market = state.live_market
@@ -1659,63 +1693,48 @@ async def _run_refresh(sendable, refinement_v: str, force_catalog_refresh: bool)
     return True, desc
 
 
-def _stop_auto_refresh() -> bool:
-    """Cancels the running auto-refresh task, if any. Returns whether one was
-    actually running (so callers can tell the user "stopped" vs "wasn't on")."""
-    global _auto_refresh_task
-    was_running = _auto_refresh_task is not None and not _auto_refresh_task.done()
-    if _auto_refresh_task is not None:
-        _auto_refresh_task.cancel()
-    _auto_refresh_task = None
-    return was_running
+refresh_controller = RefreshController(state, _run_refresh)
+automation = GuildAutomation(bot, world_feed, live_lists, refresh_controller)
 
 
-def _start_auto_refresh(
+async def _start_auto_refresh(
     channel: discord.abc.Messageable, guild_id: int | None, interval_minutes: float,
     refinement_v: str, force_catalog_refresh: bool,
 ) -> None:
-    """(Re)starts the background auto-refresh loop, replacing any previous
-    one - only a single auto-refresh config is active at a time, same as
-    the desktop app never running two fetches at once."""
-    global _auto_refresh_task
-    _stop_auto_refresh()
-    state.auto_refresh.enabled = True
-    state.auto_refresh.channel_id = getattr(channel, "id", None)
-    state.auto_refresh.guild_id = guild_id
-    state.auto_refresh.interval_minutes = interval_minutes
-    state.auto_refresh.refinement = refinement_v
-    state.auto_refresh.force_catalog_refresh = force_catalog_refresh
-    state.auto_refresh.last_run = None
-    state.auto_refresh.last_status = None
-    state.auto_refresh.last_error = None
-    _auto_refresh_task = bot.loop.create_task(
-        _auto_refresh_worker(channel, interval_minutes, refinement_v, force_catalog_refresh)
-    )
+    await refresh_controller.start(SingleRefreshOutput(channel), guild_id, interval_minutes, refinement_v, force_catalog_refresh)
 
 
-async def _auto_refresh_worker(channel, interval_minutes: float, refinement_v: str, force_catalog_refresh: bool):
-    while True:
-        try:
-            ok, summary = await _run_refresh(channel, refinement_v, force_catalog_refresh)
-            state.auto_refresh.last_run = time.time()
-            state.auto_refresh.last_status = "ok" if ok else "error"
-            state.auto_refresh.last_error = None if ok else summary
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # noqa: BLE001 - one bad cycle must not kill the whole loop
-            state.auto_refresh.last_run = time.time()
-            state.auto_refresh.last_status = "error"
-            state.auto_refresh.last_error = str(e)
-            try:
-                await channel.send(embed=discord.Embed(
-                    title="⚠️ Auto-refresh cycle failed", description=str(e), color=fmt.ERROR_COLOR,
-                ))
-            except discord.HTTPException:
-                pass
-        try:
-            await asyncio.sleep(interval_minutes * 60)
-        except asyncio.CancelledError:
-            raise
+def _can_manage_refresh(interaction):
+    return interaction.guild is not None and interaction.user.guild_permissions.manage_guild
+
+
+async def _kill_refresh(interaction):
+    if not _can_manage_refresh(interaction):
+        await interaction.response.send_message("Manage Server permission is required to stop shared pricing.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    was_running = await refresh_controller.stop()
+    _refresh_cooldowns.clear()  # allow immediate restart with new settings
+    await interaction.followup.send(
+        ("🛑 Relic refresh and its pricing worker stopped." if was_running else "Relic pricing is already stopped.")
+        + " Lists stay visible. Use `/relics refresh auto:Start` with your new settings to restart. "
+        "This affects all servers using this bot; mission and Riven feeds continue.", ephemeral=True)
+
+
+class RefreshStopView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Stop relic refresh", style=discord.ButtonStyle.danger,
+                       custom_id="relicframe:stop-refresh")
+    async def stop_button(self, interaction, button):
+        await _kill_refresh(interaction)
+
+
+@relics_group.command(name="stop", description="Kill shared relic refresh and pricing; allows an immediate restart with new settings.")
+@app_commands.default_permissions(manage_guild=True)
+async def relics_stop(interaction: discord.Interaction):
+    await _kill_refresh(interaction)
 
 
 @relics_group.command(
@@ -1728,15 +1747,15 @@ async def _auto_refresh_worker(channel, interval_minutes: float, refinement_v: s
     force_catalog_refresh="Ignore the cached item catalog and re-download it from Warframe Market.",
     auto="Manage a recurring background refresh instead of doing a one-time refresh.",
     channel="Where auto-refresh summaries get posted (auto:Start only - defaults to this channel).",
-    interval_minutes="Minutes between auto-refresh cycles, 1-1440 (auto:Start only, default 30).",
+    interval_minutes="Minutes between auto-refresh cycles, 1-1440 (auto:Start only, default 1).",
 )
 async def relics_refresh(
     interaction: discord.Interaction,
     refinement: app_commands.Choice[str] | None = None,
-    force_catalog_refresh: bool = False,
+    force_catalog_refresh: bool = True,
     auto: app_commands.Choice[str] | None = None,
     channel: discord.TextChannel | None = None,
-    interval_minutes: app_commands.Range[float, 1, 1440] = 30.0,
+    interval_minutes: app_commands.Range[float, 1, 1440] = 1.0,
 ):
     refinement_v = refinement.value if refinement else state.default_refinement
 
@@ -1756,7 +1775,8 @@ async def relics_refresh(
         await interaction.response.send_message(embed=discord.Embed(
             title="🔁 Auto-refresh status",
             description=(
-                f"Every **{cfg.interval_minutes:.0f} min** into <#{cfg.channel_id}>, "
+                f"Every **{cfg.interval_minutes:.0f} min** into "
+                f"{f'<#{cfg.channel_id}>' if cfg.channel_id else 'all configured #refresh channels'}, "
                 f"at **{cfg.refinement.capitalize()}**.\nLast cycle: {last}."
             ),
             color=fmt.BRAND_COLOR,
@@ -1764,11 +1784,11 @@ async def relics_refresh(
         return
 
     if auto is not None and auto.value == "off":
-        was_running = _stop_auto_refresh()
-        state.auto_refresh.enabled = False
-        await interaction.response.send_message(
-            "🛑 Auto-refresh stopped." if was_running else "Auto-refresh wasn't running.", ephemeral=True,
-        )
+        await _kill_refresh(interaction)
+        return
+
+    if not _can_manage_refresh(interaction):
+        await interaction.response.send_message("Manage Server permission is required to change shared pricing.", ephemeral=True)
         return
 
     # Both a plain one-time refresh and starting auto-refresh trigger an
@@ -1785,7 +1805,7 @@ async def relics_refresh(
     if auto is not None and auto.value == "on":
         target_channel = channel or interaction.channel
         await interaction.response.defer()
-        _start_auto_refresh(target_channel, interaction.guild_id, interval_minutes, refinement_v, force_catalog_refresh)
+        await _start_auto_refresh(target_channel, interaction.guild_id, interval_minutes, refinement_v, force_catalog_refresh)
         where = "" if target_channel.id == interaction.channel.id else f" into {target_channel.mention}"
         await interaction.followup.send(
             f"🔁 Auto-refresh started: every **{interval_minutes:.0f} min**{where}, "
@@ -1794,7 +1814,10 @@ async def relics_refresh(
         return
 
     await interaction.response.defer()
-    await _run_refresh(interaction.followup, refinement_v, force_catalog_refresh)
+    try:
+        await refresh_controller.run_once(interaction.followup, refinement_v, force_catalog_refresh)
+    except RuntimeError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
 
 
 @relics_group.command(name="status", description="Age of the cached price snapshot, and auto-refresh status.")
@@ -1830,7 +1853,8 @@ async def relics_status(interaction: discord.Interaction):
     cfg = state.auto_refresh
     if cfg.enabled:
         desc += (
-            f"\n🔁 Auto-refresh: every **{cfg.interval_minutes:.0f} min** into <#{cfg.channel_id}> "
+            f"\n🔁 Auto-refresh: every **{cfg.interval_minutes:.0f} min** into "
+            f"{f'<#{cfg.channel_id}>' if cfg.channel_id else 'all configured #refresh channels'} "
             f"at **{cfg.refinement.capitalize()}**."
         )
         if cfg.last_status == "error" and cfg.last_error:
@@ -1913,9 +1937,10 @@ async def relics_help(interaction: discord.Interaction):
         value=(
             "`/relics refresh` - update the live market and all configured list channels.\n"
             "`/relics setup-list` - create/repair the seven persistent live list channels.\n"
-            "`/relics refresh auto:Start channel:# interval_minutes:30` - keep it fresh automatically, "
+            "`/relics refresh auto:Start channel:#refresh interval_minutes:1` - keep it fresh automatically, "
             "posting a summary into the channel you pick.\n"
-            "`/relics refresh auto:Stop` / `auto:Status` - manage the auto-refresh loop.\n"
+            "`/relics stop` / `/relics refresh auto:Stop` - kill shared relic pricing and allow an immediate restart.\n"
+            "`/relics refresh auto:Status` - inspect the refresh loop.\n"
             "`/relics status` - age of the cached snapshot + auto-refresh state."
         ),
         inline=False,
@@ -1953,7 +1978,7 @@ async def relics_help(interaction: discord.Interaction):
         ),
         inline=False,
     )
-    embed.set_footer(text="Full setup docs: DISCORD_GUIDE.md in the bot's repo.")
+    embed.set_footer(text="Read #bot-guide for all features and setup instructions.")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -1963,70 +1988,30 @@ bot.tree.add_command(companion_group)
 bot.tree.add_command(riven_group)
 
 
-# ---------- optional background auto-refresh, configured at startup ----------
-
-async def _silent_auto_refresh_loop(minutes: float):
-    """Fallback used only when --auto-refresh-minutes is set at startup with
-    no channel to post into (no --auto-refresh-channel-id / AUTO_REFRESH_
-    CHANNEL_ID). Refreshes the snapshot on a timer like the real
-    auto-refresh loop, but only logs to the console - nobody in Discord
-    sees a summary. Prefer `/relics refresh auto:Start channel:...` or the
-    --auto-refresh-channel-id flag so the bot can actually post updates."""
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            await state.refresh(state.default_refinement)
-        except Exception as e:  # noqa: BLE001 - a failed cycle shouldn't kill the loop
-            print(f"[auto-refresh] failed: {str(e) or type(e).__name__}")
-        await asyncio.sleep(minutes * 60)
-
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--auto-refresh-minutes", type=float, default=None,
-                         help="If set, refresh the price snapshot on this interval in the background.")
+    parser.add_argument("--auto-refresh-minutes", type=float, default=1.0,
+                         help="Refresh interval in minutes (1-1440, default 1).")
     parser.add_argument("--auto-refresh-channel-id", type=int, default=None,
                          help="Channel ID to post auto-refresh summaries into (used with "
                               "--auto-refresh-minutes). Falls back to the AUTO_REFRESH_CHANNEL_ID "
-                              "env var, then to a silent console-only loop if neither is set. Can "
+                              "env var, then to each server's #refresh channel. Can "
                               "also just be set later via `/relics refresh auto:Start channel:...`.")
     parser.add_argument("--refinement", default="radiant", choices=REFINEMENTS)
     args = parser.parse_args()
+    if not 1 <= args.auto_refresh_minutes <= 1440:
+        parser.error("--auto-refresh-minutes must be between 1 and 1440")
 
     state.default_refinement = args.refinement
     token = os.environ.get("DISCORD_BOT_TOKEN")
     if not token:
         raise SystemExit("Set DISCORD_BOT_TOKEN in your environment first.")
 
-    if args.auto_refresh_minutes:
-        channel_id = args.auto_refresh_channel_id or (
-            int(os.environ["AUTO_REFRESH_CHANNEL_ID"]) if os.environ.get("AUTO_REFRESH_CHANNEL_ID") else None
-        )
-
-        @bot.event
-        async def on_ready():
-            if channel_id:
-                try:
-                    channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
-                except discord.HTTPException as e:
-                    print(f"[auto-refresh] couldn't reach channel {channel_id} ({e}); "
-                          f"falling back to a silent console-only loop.")
-                    bot.loop.create_task(_silent_auto_refresh_loop(args.auto_refresh_minutes))
-                    print(f"Logged in as {bot.user}.")
-                    return
-                _start_auto_refresh(channel, getattr(channel, "guild", None) and channel.guild.id,
-                                     args.auto_refresh_minutes, state.default_refinement, False)
-                print(f"Logged in as {bot.user}. Auto-refresh every {args.auto_refresh_minutes} min "
-                      f"into #{getattr(channel, 'name', channel_id)}.")
-            else:
-                bot.loop.create_task(_silent_auto_refresh_loop(args.auto_refresh_minutes))
-                print(f"Logged in as {bot.user}. Auto-refresh every {args.auto_refresh_minutes} min "
-                      f"(console-only - set --auto-refresh-channel-id or AUTO_REFRESH_CHANNEL_ID, "
-                      f"or run `/relics refresh auto:Start` in Discord, to get posted summaries).")
-    else:
-        @bot.event
-        async def on_ready():
-            print(f"Logged in as {bot.user}. Run /relics refresh (or /relics help) to get started.")
+    automation.minutes = args.auto_refresh_minutes
+    automation.refinement = args.refinement
+    automation.channel_id = args.auto_refresh_channel_id or (
+        int(os.environ["AUTO_REFRESH_CHANNEL_ID"]) if os.environ.get("AUTO_REFRESH_CHANNEL_ID") else None
+    )
 
     bot.run(token)
 

@@ -166,8 +166,15 @@ class WfmHttpClient:
                 return slug, None, e
 
         tasks = [asyncio.ensure_future(_one(slug)) for slug in slugs]
-        for coro in asyncio.as_completed(tasks):
-            slug, orders, error = await coro
-            result = on_result(slug, orders, error)
-            if asyncio.iscoroutine(result):
-                await result
+        try:
+            for coro in asyncio.as_completed(tasks):
+                slug, orders, error = await coro
+                result = on_result(slug, orders, error)
+                if asyncio.iscoroutine(result):
+                    await result
+        finally:
+            # Killing a bootstrap must not leave hundreds of queued HTTP tasks.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
