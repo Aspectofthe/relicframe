@@ -75,7 +75,7 @@ Available test commands:
 - `/rf-riven refresh` / `stop`: start/cancel the recurring scanner; requires Manage Server.
 - `/rf-riven flips`: page all cached candidates with weapon/budget/ROI/online filters; includes rolls, links and copyable whispers.
 - `/rf-riven price`, `top`, `chatlog`, `chatstats`, `guide`: weekly aggregates, explicit offer-text imports and usage instructions.
-- `/rf-companion`: manually supply natural traits; requires private evidence copied separately.
+- `/rf-companion appraise`: manually supply natural traits against private evidence; `/rf-companion guide` explains photos, inherited traits, color tiers and historical two-imprint ranges.
 - `/rf-world setup`, `refresh`, `start`, `stop`, `status`, `help`: repair and control the C# world boards. Setup/start/stop/refresh require Manage Server; setup also requires the bot to have Manage Channels and Manage Roles.
 - `/rf-panel setup`, `config`, `refresh`, `start`, `stop`, `status`, `help`: persistent Radiant-by-default ranking board, saved filters and its one-minute kill switch.
 

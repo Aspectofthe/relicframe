@@ -11,7 +11,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 | `live_market`, `wfm_api`, `item_catalog_cache`, `slug_registry`, `seller_blacklist` | `LiveMarket.cs`, `SellerBlacklist.cs` | Full catalog/drop-table refresh, WebSocket reconciliation, production state compatibility |
 | `riven_roll_rules` | `RivenRules.cs` | Workbook re-import utility |
 | `riven_market`, `auction_pool` | `RivenPricing.cs`, `RivenMarket.cs`, `PublicPayload.cs` | Variant-family lookup parity, per-weapon auction queries, all original command options, real-feed validation |
-| `companion_appraisal`, color rarity from `companion_vision` | `Companions.cs` | Differential appraisal tests against broader evidence, complete guide and screenshot workflow |
+| `companion_appraisal`, `companion_guide`, color rarity from `companion_vision` | `Companions.cs`, `/rf-companion appraise|guide` | Differential appraisal tests against broader evidence and a reliable free screenshot-classification model/workflow |
 | `companion_export_analyzer` | `CompanionExports.cs`, `RelicFrame.Tools` | Streaming/peak-memory validation on the two very large historical HTML archives, CSV/summary presentation parity |
 | Parts of `bot`, `diagnostics`, `memory_usage`, `workload` | `RelicFrame.Bot` | Production command parity and workload soak tests |
 | Major `world_state`, `discord_world_state` paths | `WorldState.cs`, `WorldManager.cs` | Full static browse.wf enrichment, official fallback for non-fissure sections, detailed bounty/Steel Path rendering and live Discord permission/reconnect soak |
@@ -26,7 +26,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 - `parse_official_drops`, `fetch_relic_data`, `wfinfo_data`, `vault_status`: complete automatic drop-table/catalog/vault refresh. C# currently reads the supplied relic CSV; only the ducat-map portion of WFInfo is used live.
 - DiscordChatExporter HTML/JSON evidence ingestion and `companion_chat_importer` TXT/image portable archives are now ported as offline C# tools. The supplied 3,900-message JSON export matched all Python aggregate counts; giant historical HTML still needs streaming/peak-memory validation.
 - `companion_vision`: screenshot identification. The preview does not infer reliable natural colors, build or pattern from an image. No paid API or made-up local model has been substituted.
-- `companion_guide`, `import_riven_roll_rules`: complete reference/help presentation and source-workbook importer.
+- `import_riven_roll_rules`: source-workbook importer. Companion usage, price factors, historical examples and natural-color tiers now have an in-bot guide, though its richer multi-embed presentation is not duplicated yet.
 - `discord_webhook`, `formatting`, `local_env`: legacy integrations, presentation parity and deployment/environment migration.
 - `main`, `profile_memory` and root Python hosting entry point: desktop GUI/diagnostic tools and production launch scripts remain Python. The new executable is not selected by them.
 

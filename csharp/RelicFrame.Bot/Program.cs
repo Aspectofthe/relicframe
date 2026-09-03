@@ -203,9 +203,11 @@ sealed class PreviewCommands(IReadOnlyDictionary<string, Relic> relics, LiveMark
             }
             group.AddOption(sub);
         }
-        var appraise = new SlashCommandBuilder().WithName("rf-companion").WithDescription("C# preview: manual-trait comparable appraisal");
+        var companionGroup = new SlashCommandBuilder().WithName("rf-companion").WithDescription("C# companion appraisal and guide");
+        var appraise = new SlashCommandOptionBuilder().WithName("appraise").WithDescription("Evidence-backed appraisal from manually identified natural traits").WithType(ApplicationCommandOptionType.SubCommand);
         foreach (var field in new[] { "species", "breed", "pattern", "build", "rarity", "color" }) appraise.AddOption(field, ApplicationCommandOptionType.String, $"Natural {field}", field == "species");
-        return [new SlashCommandBuilder().WithName("rf-status").WithDescription("C# responsiveness and memory diagnostic").Build(), group.Build(), appraise.Build(), RivenCommands.Build()];
+        companionGroup.AddOption(appraise).AddOption(new SlashCommandOptionBuilder().WithName("guide").WithDescription("How traits, colors and historical ranges affect value").WithType(ApplicationCommandOptionType.SubCommand));
+        return [new SlashCommandBuilder().WithName("rf-status").WithDescription("C# responsiveness and memory diagnostic").Build(), group.Build(), companionGroup.Build(), RivenCommands.Build()];
     }
     private static string Get(IEnumerable<SocketSlashCommandDataOption> options, string name, string fallback = "") => options.FirstOrDefault(o => o.Name == name)?.Value?.ToString() ?? fallback;
     private static string P(double? value) => value?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unknown";
@@ -216,7 +218,13 @@ sealed class PreviewCommands(IReadOnlyDictionary<string, Relic> relics, LiveMark
         if (command.CommandName == "rf-riven") return await RivenCommands.ExecuteAsync(command, rivens, tradeChat, ct);
         if (command.CommandName == "rf-companion")
         {
-            var request = command.Data.Options.ToDictionary(o => o.Name, o => (string?)o.Value.ToString());
+            var companionSub = command.Data.Options.Single();
+            if (companionSub.Name == "guide") return "Companion appraisal guide (prices are for both imprints and are estimates)\n" +
+                "Use /rf-companion appraise with species, pattern and Kubrow build; add breed, rarity and natural colors when known. Remove armor/skins, use neutral white/black ship lighting, disable color correction, and preview Nexus or Tigrol to separate color slots.\n\n" +
+                "Value factors: bulky is usually highest demand; Lotus usually leads patterns, then Merle; Hound/Domino are mid-range; Striped/Patchy are base. Chesa/Sunika often price higher, but current evidence outranks old charts. Height, gender and cosmetics are not inherited.\n\n" +
+                "Historical two-print examples: bulky common—Striped/Patchy 40–70p, Domino 60–80p, Hound 70–80p, Merle 80–100p, Lotus 100–150p. Bulky Lotus—single rare 300–500p, double rare 700–1,200p, triple rare 1,800–2,500p, solid rare 2,500–3,500p. Bulky Merle—single rare 200–450p, double rare 500–800p, triple rare 1,400–1,800p, solid rare 1,500–2,500p.\n\n" +
+                "Rare natural colors: Anyo Grey, Ambulas Black, Shadow Grey, Sargas Brown, Jupiter Brown, Phorid Red, Alad Blue and Venus Brown. Energy color is separate. The bot never treats an asking price as a confirmed sale.";
+            var request = companionSub.Options.ToDictionary(o => o.Name, o => (string?)o.Value.ToString());
             var appraisal = companion.Value.Appraise(request);
             return $"Imprint estimate: {appraisal.Low}–{appraisal.High} platinum (midpoint {appraisal.Estimate}).\n" +
                 $"{appraisal.ComparableCount} comparables; confidence {appraisal.Confidence}. Listings are not confirmed sales.\n" +
