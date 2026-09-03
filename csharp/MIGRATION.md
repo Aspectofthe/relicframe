@@ -12,6 +12,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 | `riven_roll_rules` | `RivenRules.cs` | Workbook re-import utility |
 | `riven_market`, `auction_pool` | `RivenPricing.cs`, `RivenMarket.cs`, `PublicPayload.cs` | Variant-family lookup parity, per-weapon auction queries, all original command options, real-feed validation |
 | `companion_appraisal`, color rarity from `companion_vision` | `Companions.cs` | Differential appraisal tests against broader evidence, complete guide and screenshot workflow |
+| `companion_export_analyzer` | `CompanionExports.cs`, `RelicFrame.Tools` | Streaming/peak-memory validation on the two very large historical HTML archives, CSV/summary presentation parity |
 | Parts of `bot`, `diagnostics`, `memory_usage`, `workload` | `RelicFrame.Bot` | Production command parity and workload soak tests |
 | Major `world_state`, `discord_world_state` paths | `WorldState.cs`, `WorldManager.cs` | Full static browse.wf enrichment, official fallback for non-fissure sections, detailed bounty/Steel Path rendering and live Discord permission/reconnect soak |
 | Saved relic result panels | `RelicPanel.cs`, `RelicPanelManager.cs` | Live Discord permission/restart soak and richer presentation metadata |
@@ -23,7 +24,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 - Remaining `discord_automation`, `discord_live_lists`, `bot_guide` parity: richer legacy presentation and live-guild migration/permission/reconnect validation. C# now provisions the requested world channels and roles plus a guide, and provides a saved Radiant-default relic panel with persisted filters, one-minute rendering, and start/stop controls.
 - `ws_client`, `reconciler`, `state`: gateway-driven order updates, staleness repair and compatible production caches/state.
 - `parse_official_drops`, `fetch_relic_data`, `wfinfo_data`, `vault_status`: complete automatic drop-table/catalog/vault refresh. C# currently reads the supplied relic CSV; only the ducat-map portion of WFInfo is used live.
-- `companion_chat_importer`, `companion_export_analyzer`: HTML/JSON export and asset ingestion. Existing generated JSONL is readable; raw export processing is not ported.
+- DiscordChatExporter HTML/JSON evidence ingestion and `companion_chat_importer` TXT/image portable archives are now ported as offline C# tools. The supplied 3,900-message JSON export matched all Python aggregate counts; giant historical HTML still needs streaming/peak-memory validation.
 - `companion_vision`: screenshot identification. The preview does not infer reliable natural colors, build or pattern from an image. No paid API or made-up local model has been substituted.
 - `companion_guide`, `import_riven_roll_rules`: complete reference/help presentation and source-workbook importer.
 - `discord_webhook`, `formatting`, `local_env`: legacy integrations, presentation parity and deployment/environment migration.
@@ -41,6 +42,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 - Synthetic relic service, catalog resolution, ducat fallback, seller exclusions, cancelled refresh, real snapshot timestamps and failed-fetch reporting.
 - Synthetic rendering for every world channel, Arbitration schedule/tier matching, normal/Steel Cascade and all tier signatures, stale-source wording, and official-DE fissure normalization.
 - Persistent relic-panel Radiant defaults and saved-filter selection.
+- Discord export parsing, price/trait classification, deduplication and appraiser-compatible evidence generation; the supplied current-market export matched the Python analyzer's 3,900 messages, 11,310 attachments, 2,391 classified rows and 1,413 unique evidence rows.
 - Offline memory benchmark. No full Discord/load/container soak test yet.
 
 ## Required release gates

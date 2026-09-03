@@ -14,6 +14,7 @@ The executable is C#/.NET 10, using Discord.Net 3.20.1. It does not run Python, 
 - Background Riven scans that evaluate every catalog family against stat-search results, disk-backed deduplication, saved candidate indexes, bounded weekly history, stop/restart and seller/listing links. Search-result caps mean **not every listing is available**; the bot must not claim otherwise.
 - Explicit manual Riven trade-chat text imports with local deduplication and offer summaries. These are offers, not confirmed sales; there is no passive game-chat interception.
 - Manual-trait companion appraisal from existing private JSONL evidence, distinguishing current versus historical evidence and listings versus confirmed sales. Natural-color rarity classification from supplied names.
+- An offline `RelicFrame.Tools` importer for DiscordChatExporter HTML/JSON that preserves source files and produces appraiser-compatible private JSONL. It is separate from the always-on bot so export processing does not consume hosting RAM.
 - A test-guild Discord preview with immediate deferred acknowledgement, two calculation workers, a bounded queue, and a separate fast status command.
 - Test-guild world feeds: automatic `WARFRAME LIVE` setup, the requested visible channel names, persistent role buttons, all base/Arbitration/fissure-tier roles, one-minute background updates, per-channel replacement pings, Cascade split by normal/Steel Path, `Lvl <grade> tier` fissure labels, and fresh official-DE fissure fallback when the translated source is stale.
 
@@ -25,16 +26,26 @@ Install the .NET 10 SDK. From the repository root:
 
 ```powershell
 dotnet build csharp/RelicFrame.Bot -c Release
+dotnet build csharp/RelicFrame.Tools -c Release
 python csharp/generate_parity.py
 dotnet run --project csharp/RelicFrame.Tests -c Release -- csharp/fixtures.generated.json
 dotnet csharp/RelicFrame.Bot/bin/Release/net10.0/RelicFrame.Bot.dll
 ```
 
-The fixture generator requires the existing Python development dependencies in `relicframe/requirements.txt`. It uses synthetic inputs only, not Discord exports, tokens or private sales records. Generated fixtures, binaries, SDK files and runtime state are not committed.
+The fixture generator requires the existing Python development dependencies in `relicframe/requirements.txt`. It uses synthetic inputs only, not Discord exports, tokens or private sales records. Generated fixtures, binaries, SDK files and runtime state are not committed. Real-export validation is performed separately and its generated data remains ignored.
 
 On this workspace the local SDK is `.tools/dotnet/dotnet.exe`, and the existing Python interpreter is `relicframe/.venv/Scripts/python.exe`. These are local tools, not part of the C# deployment.
 
 No arguments prints the preview notice and exits without connecting to anything.
+
+Import private breeding exports offline with:
+
+```powershell
+dotnet run --project csharp/RelicFrame.Tools -c Release -- companion-export csharp/runtime/companion-import "export-one.json" "export-two.html"
+dotnet run --project csharp/RelicFrame.Tools -c Release -- companion-folder "folder-of-txt-and-images" csharp/runtime/portable-chat
+```
+
+The importers never change their source exports. `companion-folder` groups matching TXT/images and creates escaped portable HTML, text and JSONL with copied assets. Output is private runtime data and ignored by Git; review heuristic evidence before using it. The supplied 3,900-message JSON sales export produced the exact same message, attachment, classification and deduplication counts as the Python analyzer. The much larger historical HTML exports still require a peak-memory/streaming validation before they should be processed on a small host.
 
 ## Optional test-guild run
 

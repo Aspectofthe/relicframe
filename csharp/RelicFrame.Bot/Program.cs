@@ -236,7 +236,7 @@ sealed class PreviewCommands(IReadOnlyDictionary<string, Relic> relics, LiveMark
             await market.StartAsync(true, CancellationToken.None); return "C# market refresh started in background. /rf-status stays available during bootstrap.";
         }
         if (name == "help") return "C# preview: /rf-status, /rf-relics refresh/stop/list/detail/find/odds/compare/buyn, /rf-companion.\n" +
-            "Also available: /rf-riven refresh/stop/flips/price/top/guide.\nStill being ported: production auto-setup, live panels, opt-in pings, screenshot recognition, trade-chat imports and desktop tooling.\n" +
+            "Also available: /rf-riven refresh/stop/flips/price/top/chatlog/chatstats/guide, /rf-world and /rf-panel.\nStill being ported: screenshot recognition, full feed enrichment, WebSocket order reconciliation and deployment soak testing.\n" +
             "Do not replace the Python deployment with this preview yet.";
         var tier = Enum.Parse<Refinement>(Get(options, "refinement", "radiant"), true);
         var reward = Get(options, "reward"); var relicName = Get(options, "relic");

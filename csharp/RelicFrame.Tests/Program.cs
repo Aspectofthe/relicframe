@@ -88,6 +88,25 @@ try
     var appraisal = new CompanionAppraiser(CompanionAppraiser.Load(path)).Appraise(new Dictionary<string, string?> { ["species"] = "kubrow" });
     Assert(appraisal.Estimate == 200 && appraisal.ComparableCount == 1, "companion evidence appraisal");
     Assert(original.SequenceEqual(File.ReadAllBytes(path)), "evidence remains untouched");
+    Assert(CompanionExports.ExtractAmounts("asking 100-150p").Single().High == 150 && CompanionExports.ExtractAmounts("sold for 1.5k").Single().Low == 1500, "companion export price parsing");
+    var htmlExport = Path.Combine(temp, "Guild - kubrow_sales [123].html");
+    File.WriteAllText(htmlExport, """
+        <!doctype html><div class="chatlog__message-group">
+        <div class="chatlog__message-container" data-message-id="1"><span class="chatlog__author" data-user-id="u1">Breeder</span><span class="chatlog__timestamp" title="Monday, August 24, 2026 1:30 PM"></span><div class="chatlog__content">Sold bulky Lotus Kubrow for 250p</div></div>
+        <div class="chatlog__message-container" data-message-id="2"><div class="chatlog__short-timestamp" title="Monday, August 24, 2026 1:31 PM"></div><div class="chatlog__content">Proof</div><div class="chatlog__attachment"><a href="sale.png"><img class="chatlog__attachment-media" title="Image: sale.png (1 MB)"></a></div></div>
+        </div>
+        """);
+    var importedHtml = CompanionExports.ReadHtml(htmlExport);
+    Assert(importedHtml.Length == 2 && importedHtml[1].Author == "Breeder" && importedHtml[1].Attachments.Single().Filename == "sale.png", "Discord HTML export author and attachment parsing");
+    var importOut = Path.Combine(temp, "companion-import"); var importSummary = CompanionExports.BuildEvidence([htmlExport], importOut);
+    Assert(importSummary.Messages == 2 && importSummary.PriceEvidence == 1 && importSummary.DeduplicatedPriceEvidence == 1, "offline companion evidence dataset");
+    var importedAppraisal = new CompanionAppraiser(CompanionAppraiser.Load(Path.Combine(importOut, "price_evidence_deduplicated.jsonl"))).Appraise(new Dictionary<string, string?> { ["species"] = "kubrow", ["pattern"] = "lotus", ["build"] = "bulky" });
+    Assert(importedAppraisal.Estimate == 250, "imported companion evidence is appraiser-compatible");
+    var loose = Path.Combine(temp, "loose-sales"); var seller = Path.Combine(loose, "Seller One"); Directory.CreateDirectory(seller);
+    File.WriteAllText(Path.Combine(seller, "2026-08-24_sale.txt"), "<script>Sold Lotus Kubrow for 250p</script>"); File.WriteAllBytes(Path.Combine(seller, "2026-08-24_sale.png"), "image"u8.ToArray());
+    var archiveOut = Path.Combine(temp, "portable-chat"); var archive = CompanionChatArchive.Build(loose, archiveOut);
+    Assert(archive.Messages == 1 && archive.TextFiles == 1 && archive.Images == 1 && File.Exists(Path.Combine(archiveOut, "messages.jsonl")), "portable TXT/image chat archive grouping");
+    var archiveHtml = File.ReadAllText(Path.Combine(archiveOut, "index.html")); Assert(!archiveHtml.Contains("<script>Sold") && archiveHtml.Contains("&lt;script&gt;"), "portable chat HTML escaping");
     var csv = Path.Combine(temp, "relics.csv");
     File.WriteAllText(csv, "relic_name,reward_name,rarity,vaulted\nLith Test,\"Reward, comma\",rare,\n");
     var relic = Relic.LoadCsv(csv)["Lith Test"];
