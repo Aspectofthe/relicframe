@@ -13,10 +13,11 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 | `riven_market`, `auction_pool` | `RivenPricing.cs`, `RivenMarket.cs`, `PublicPayload.cs` | Variant-family lookup parity, per-weapon auction queries, all original command options, real-feed validation |
 | `companion_appraisal`, color rarity from `companion_vision` | `Companions.cs` | Differential appraisal tests against broader evidence, complete guide and screenshot workflow |
 | Parts of `bot`, `diagnostics`, `memory_usage`, `workload` | `RelicFrame.Bot` | Production command parity and workload soak tests |
+| Major `world_state`, `discord_world_state` paths | `WorldState.cs`, `WorldManager.cs` | Full static browse.wf enrichment, official fallback for non-fissure sections, detailed bounty/Steel Path rendering and live Discord permission/reconnect soak |
 
 ## Not ported — do not remove the Python implementation
 
-- `world_state`, `discord_world_state`: translated/official fallback, browse.wf data, all mission/vendor/news/cycle channels, Arbitration schedules/tiers, normal and Steel Path Cascade fissures, custom emoji resolution, role menus and persistent ping deduplication.
+- Remaining `world_state`, `discord_world_state` enrichment: browse.wf regions/challenges/Steel Path Incursion schedule, official-DE repair for non-fissure sections, detailed bounty rows and custom guild emoji lookup. Channels, roles, schedule tiers, Cascade split, stale-fissure fallback and persistent signature deduplication now have C# implementations, but have not been live-guild tested.
 - `discord_automation`, `discord_live_lists`, `bot_guide`: startup/guild-join provisioning, channel renames/migration, full feature guide channel, saved relic panels, one-minute default refresh and restart-with-filters controls.
 - `ws_client`, `reconciler`, `state`: gateway-driven order updates, staleness repair and compatible production caches/state.
 - `parse_official_drops`, `fetch_relic_data`, `wfinfo_data`, `vault_status`: complete automatic drop-table/catalog/vault refresh. C# currently reads the supplied relic CSV; only the ducat-map portion of WFInfo is used live.
@@ -37,6 +38,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 - Disk-pool path isolation, deduplication and owned temporary-file cleanup.
 - Synthetic end-to-end Riven scan, all catalog families visited, full roll values saved, index reload and cancellation without publishing incomplete results as a complete index.
 - Synthetic relic service, catalog resolution, ducat fallback, seller exclusions, cancelled refresh, real snapshot timestamps and failed-fetch reporting.
+- Synthetic rendering for every world channel, Arbitration schedule/tier matching, normal/Steel Cascade and all tier signatures, stale-source wording, and official-DE fissure normalization.
 - Offline memory benchmark. No full Discord/load/container soak test yet.
 
 ## Required release gates

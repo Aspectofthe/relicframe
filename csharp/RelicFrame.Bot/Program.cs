@@ -19,7 +19,7 @@ if (args.Contains("--profile-host"))
     await using var profileMarket = new LiveMarket(profileHttp, catalog, isolated);
     await using var profileRivens = new RivenMarket(profileHttp, isolated, Path.Combine(reference, "rivens", "roll_rules.json"));
     using var profileSocket = new DiscordSocketClient(new DiscordSocketConfig { GatewayIntents = GatewayIntents.Guilds, MessageCacheSize = 0, AlwaysDownloadUsers = false });
-    var commands = PreviewCommands.Build();
+    var commands = PreviewCommands.Build().Append(WorldManager.BuildCommand()).ToArray();
     GC.Collect(); GC.WaitForPendingFinalizers(); using var process = Process.GetCurrentProcess();
     Console.WriteLine($"[profile-host] disconnected preview; relics={catalog.Count}, command_groups={commands.Length}, rss_mb={process.WorkingSet64 / 1048576d:F1}, peak_mb={process.PeakWorkingSet64 / 1048576d:F1}");
     Console.WriteLine("No Discord login, live API request, private evidence load or channel changes performed. Not full-load RAM.");
@@ -50,9 +50,10 @@ using var socket = new DiscordSocketClient(new DiscordSocketConfig
     GatewayIntents = GatewayIntents.Guilds,
     MessageCacheSize = 0, AlwaysDownloadUsers = false, LogLevel = LogSeverity.Warning
 });
+await using var world = new WorldManager(socket, guildId, runtimePath, Environment.GetEnvironmentVariable("ARBITRATION_SCHEDULE_PATH") ?? "Untitled.txt");
 socket.Log += message => { Console.WriteLine($"[discord] {message.Severity}: {message.Exception?.GetType().Name ?? message.Message}"); return Task.CompletedTask; };
 var jobs = Channel.CreateBounded<SocketSlashCommand>(new BoundedChannelOptions(16) { FullMode = BoundedChannelFullMode.Wait });
-var dispatcher = new PreviewCommands(relics, market, rivens, dataPath);
+var dispatcher = new PreviewCommands(relics, market, rivens, world, lifetime.Token, dataPath);
 var workers = Enumerable.Range(0, 2).Select(_ => Task.Run(async () =>
 {
     await foreach (var command in jobs.Reader.ReadAllAsync())
@@ -75,13 +76,13 @@ var workers = Enumerable.Range(0, 2).Select(_ => Task.Run(async () =>
 })).ToArray();
 socket.SlashCommandExecuted += async command =>
 {
-    if (command.GuildId != guildId || command.CommandName is not ("rf-status" or "rf-relics" or "rf-companion" or "rf-riven")) return;
+    if (command.GuildId != guildId || command.CommandName is not ("rf-status" or "rf-relics" or "rf-companion" or "rf-riven" or "rf-world")) return;
     if (command.CommandName == "rf-status")
     {
         using var process = Process.GetCurrentProcess();
         await command.RespondAsync($"C# preview is responding. Gateway latency: {socket.Latency} ms.\n" +
             $"RAM: {process.WorkingSet64 / 1048576d:F1} MiB. Market: {market.Status}; books {market.ReadyBooks}/{market.TotalBooks}.\n" +
-            $"Rivens: {rivens.Status}.\nWorld feeds and production panels are not ported yet.", ephemeral: true, allowedMentions: AllowedMentions.None);
+            $"Rivens: {rivens.Status}.\nWorld: {world.Status}.", ephemeral: true, allowedMentions: AllowedMentions.None);
         return;
     }
     // Acknowledge before dispatch, including when market initialization or calculations are busy.
@@ -89,18 +90,37 @@ socket.SlashCommandExecuted += async command =>
     if (!jobs.Writer.TryWrite(command)) await command.ModifyOriginalResponseAsync(m => m.Content = "The calculation queue is full. Try again shortly; /rf-status remains available.");
 };
 var registration = new SemaphoreSlim(1, 1); bool registered = false;
-socket.Ready += async () =>
+async Task ConfigureGuild(SocketGuild guild)
 {
     await registration.WaitAsync();
     try
     {
         if (registered) return;
-        var guild = socket.GetGuild(guildId) ?? throw new InvalidOperationException("Test guild unavailable to this bot.");
-        foreach (var command in PreviewCommands.Build()) await guild.CreateApplicationCommandAsync(command);
+        var existing = await guild.GetApplicationCommandsAsync();
+        foreach (var command in PreviewCommands.Build().Append(WorldManager.BuildCommand()))
+        {
+            var slash = (SlashCommandProperties)command;
+            var old = existing.FirstOrDefault(c => c.Name == slash.Name.Value);
+            // Only replace this preview's exact rf-* names; never bulk-overwrite or touch production commands.
+            if (old is not null) await old.DeleteAsync();
+            await guild.CreateApplicationCommandAsync(command);
+        }
+        var result = await world.SetupAsync(guild, lifetime.Token); Console.WriteLine("[setup] " + result);
+        if (result.StartsWith("Configured", StringComparison.Ordinal)) world.Start(lifetime.Token);
         registered = true; Console.WriteLine("[ready] C# preview commands registered in test guild only; market waits for /rf-relics refresh.");
     }
-    catch (Exception e) { Console.WriteLine($"[setup] failed: {e.GetType().Name}; check test guild and bot permissions"); }
     finally { registration.Release(); }
+}
+socket.Ready += async () =>
+{
+    try { await ConfigureGuild(socket.GetGuild(guildId) ?? throw new InvalidOperationException("Test guild unavailable to this bot.")); }
+    catch (Exception e) { Console.WriteLine($"[setup] failed: {e.GetType().Name}; check test guild and bot permissions"); }
+};
+socket.JoinedGuild += async guild =>
+{
+    if (guild.Id != guildId) return;
+    try { await ConfigureGuild(guild); }
+    catch (Exception e) { Console.WriteLine($"[guild-join] setup failed: {e.GetType().Name}; run /rf-world setup after fixing permissions"); }
 };
 try
 {
@@ -116,7 +136,7 @@ catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
 finally
 {
     lifetime.Cancel(); jobs.Writer.TryComplete();
-    await market.StopAsync(); await rivens.StopAsync(); await Task.WhenAll(workers);
+    await market.StopAsync(); await rivens.StopAsync(); await world.StopAsync(); await Task.WhenAll(workers);
     await socket.StopAsync(); await socket.LogoutAsync(); registration.Dispose();
 }
 
@@ -142,7 +162,7 @@ static void ProfileOrders()
     Console.WriteLine($"[profile] books={books.Count} checksum={checksum} query_s={watch.Elapsed.TotalSeconds:F3}");
 }
 
-sealed class PreviewCommands(IReadOnlyDictionary<string, Relic> relics, LiveMarket market, RivenMarket rivens, string dataPath)
+sealed class PreviewCommands(IReadOnlyDictionary<string, Relic> relics, LiveMarket market, RivenMarket rivens, WorldManager world, CancellationToken lifetime, string dataPath)
 {
     private readonly Lazy<CompanionAppraiser> companion = new(() => new CompanionAppraiser(
         CompanionAppraiser.Load(Path.Combine(dataPath, "companion_current_market", "price_evidence_deduplicated.jsonl"))
@@ -188,6 +208,7 @@ sealed class PreviewCommands(IReadOnlyDictionary<string, Relic> relics, LiveMark
     private static string P(double? value) => value?.ToString("0.##", CultureInfo.InvariantCulture) ?? "unknown";
     public async Task<string> ExecuteAsync(SocketSlashCommand command, CancellationToken ct)
     {
+        if (command.CommandName == "rf-world") return await world.CommandAsync(command, ct, lifetime);
         if (command.CommandName == "rf-riven") return await RivenCommands.ExecuteAsync(command, rivens, ct);
         if (command.CommandName == "rf-companion")
         {

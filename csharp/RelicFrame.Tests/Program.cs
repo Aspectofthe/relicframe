@@ -160,9 +160,46 @@ try
         Assert(market.ReadyBooks == 0, "failed order fetches are not reported as loaded books");
         await market.StopAsync();
     }
+    var schedulePath = Path.Combine(temp, "schedule.txt");
+    File.WriteAllText(schedulePath, "Mon, August 24\n0400 • Void Cascade - Corpus @ Tuvul Commons, Zariman (S tier, 25% resource bonus)\n0500 • Defense - Grineer @ Hydron, Sedna (C tier)\ninvalid line\n");
+    var schedule = ArbitrationSchedule.Load(schedulePath, "America/New_York", 2026);
+    Assert(schedule.Length == 2 && schedule[0].Tier == "S" && schedule[0].ResourceBonus == "25% resource bonus", "arbitration schedule parser");
+    Assert(ArbitrationSchedule.TierFor(schedule, "Tuvul Commons (Zariman)", "Void Cascade") == "S", "schedule tier matches normalized fissure node");
+    var future = DateTimeOffset.UtcNow.AddHours(1).ToString("O"); var old = DateTimeOffset.UtcNow.AddHours(-1).ToString("O");
+    using (var worldDoc = JsonDocument.Parse(JsonSerializer.Serialize(new { timestamp = DateTimeOffset.UtcNow, fissures = new object[] {
+        new { id="normal", tier="Lith", tierNum=1, missionType="Void Cascade", node="Tuvul Commons (Zariman)", expiry=future, isHard=false, isStorm=false },
+        new { id="steel", tier="Axi", tierNum=4, missionType="Void Cascade", node="Tuvul Commons (Zariman)", expiry=future, isHard=true, isStorm=false },
+        new { id="storm", tier="Neo", tierNum=3, missionType="Survival", node="Railjack", expiry=future, isHard=false, isStorm=true } },
+        cetusCycle = new { state="day", expiry=future }, vallisCycle = new { state="warm", expiry=future }, cambionCycle = new { state="fass", expiry=future }, duviriCycle = new { state="joy", expiry=future }, zarimanCycle = new { state="corpus", expiry=future },
+        news = new[] { new { id="news", message="Test news", date=old, link="https://example.invalid/news" } }, alerts=Array.Empty<object>(), events=Array.Empty<object>(), invasions=Array.Empty<object>(), dailyDeals=Array.Empty<object>(),
+        sortie = new { id="sortie", boss="Test Boss", expiry=future, variants=new[] { new { missionType="Defense", modifier="Test", node="Hydron" } }, activation=old },
+        archonHunt = new { id="archon", boss="Test Archon", expiry=future, missions=new[] { new { type="Survival" } }, activation=old }, steelPath = new { expiry=future, currentReward=new { name="Umbra Forma", cost=150 } },
+        archimedeas=Array.Empty<object>(), voidTrader=new { activation=future, expiry=future, location="Test Relay" }, kinepage=new { message="Test transmission", timestamp=old } })))
+    using (var bountyDoc = JsonDocument.Parse("{\"rot\":\"A\",\"vaultRot\":\"B\",\"expiry\":123,\"bounties\":{\"HexSyndicate\":[{}]}}"))
+    {
+        var snapshot = new WorldSnapshot(worldDoc.RootElement, bountyDoc.RootElement, DateTimeOffset.UtcNow, false, "synthetic", []);
+        foreach (var key in new[] { "bot-guide", "world-cycles", "world-news", "world-alerts", "world-sortie", "world-archon", "world-steel-path", "world-weekly", "world-archimedea", "world-vendors", "world-bounties", "world-fissures", "world-steel-fissures", "world-void-storms", "world-invasions", "world-arbitration", "world-cascade" })
+        { var boards = WorldRender.Build(key, snapshot, schedule); Assert(boards is { Length: > 0 and <= 10 } && boards.All(b => b.Description.Length <= 4096), "world board " + key); }
+        var fissure = WorldRender.Build("world-fissures", snapshot, schedule)[0].Description;
+        Assert(fissure.Contains("Lvl S tier") && !fissure.Contains("Arbitration S tier"), "fissure displays Lvl tier wording");
+        var cascade = WorldRender.Build("world-cascade", snapshot, schedule)[0].Description;
+        Assert(cascade.Contains("Normal Void Cascade") && cascade.Contains("Steel Path Void Cascade") && !cascade.Contains("Upcoming Void Cascade Arbitrations"), "cascade board sections");
+        var signatures = WorldRender.Signatures(snapshot, schedule);
+        Assert(signatures["cascade"].SequenceEqual(["normal"]) && signatures["steel_cascade"].SequenceEqual(["steel"]) && signatures["void_storm_neo"].SequenceEqual(["storm"]), "separate cascade and fissure-tier signatures");
+        using var empty = JsonDocument.Parse("{\"fissures\":[]}"); var stale = snapshot with { Stale = true, World = empty.RootElement };
+        Assert(WorldRender.Build("world-fissures", stale, schedule)[0].Description.Contains("source is delayed"), "stale mission source is not called empty");
+    }
+    using (var worldClient = new WorldStateClient(new WorldFeedHandler()))
+    {
+        var fallback = await worldClient.FetchAsync(default);
+        Assert(fallback.Stale && fallback.RepairedSections.SequenceEqual(["fissures"]) && fallback.Source.StartsWith("official"), "fresh official data repairs stale parsed fissures");
+        var officialRow = fallback.World.Get("fissures").Rows().Single();
+        Assert(officialRow.Get("id").Text() == "fresh" && officialRow.Get("tier").Text() == "Neo" && officialRow.Get("missionType").Text() == "Defense" && officialRow.Get("node").Text() == "Hydron (Sedna)", "official fissure normalization: " + officialRow.GetRawText());
+        Assert(!WorldRender.Build("world-fissures", fallback, schedule)[0].Description.Contains("source is delayed"), "repaired fissures are not labelled delayed");
+    }
 }
 finally { Directory.Delete(temp, true); } // exact, freshly created test-only directory
-Console.WriteLine("PASS: compression, concurrent snapshots, HTTP retry/cancellation, evidence, CSV, safe literals, disk pool, synthetic Riven/relic services, exclusions and stale-data handling.");
+Console.WriteLine("PASS: compression, concurrent snapshots, HTTP retry/cancellation, evidence, CSV, safe literals, disk pool, synthetic Riven/relic/world services, exclusions, tier/ping rendering and stale-data repair.");
 
 static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
 static void Compare(JsonElement expected, JsonElement actual, string path)
@@ -238,6 +275,17 @@ sealed class MarketFeedHandler : HttpMessageHandler
         else if (uri.EndsWith("/filtered_items")) json = "{\"eqmt\":{\"Test\":{\"parts\":{\"Reward\":{\"ducats\":100}}}}}";
         else if (InvalidOrders) json = "{\"data\":\"invalid\"}";
         else json = "{\"data\":[{\"id\":\"1\",\"type\":\"sell\",\"platinum\":1,\"quantity\":5,\"subtype\":\"radiant\",\"user\":{\"ingameName\":\"Badseller\",\"status\":\"online\"}},{\"id\":\"2\",\"type\":\"sell\",\"platinum\":20,\"quantity\":5,\"subtype\":\"radiant\",\"user\":{\"ingameName\":\"GoodSeller\",\"status\":\"online\"}}]}";
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });
+    }
+}
+sealed class WorldFeedHandler : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        var uri = request.RequestUri!.ToString(); var now = DateTimeOffset.UtcNow;
+        string Mongo(DateTimeOffset value) => $"{{\"$date\":{{\"$numberLong\":\"{value.ToUnixTimeMilliseconds()}\"}}}}";
+        var json = uri.EndsWith("/pc") ? "{\"timestamp\":\"2020-01-01T00:00:00Z\",\"fissures\":[]}" : uri.Contains("bounty-cycle") ? "{}" : uri.EndsWith("/solNodes") ? "{\"SolNode1\":{\"value\":\"Hydron (Sedna)\",\"type\":\"Defense\"}}" :
+            $"{{\"Time\":{now.ToUnixTimeSeconds()},\"ActiveMissions\":[{{\"_id\":{{\"$oid\":\"fresh\"}},\"Activation\":{Mongo(now.AddMinutes(-1))},\"Expiry\":{Mongo(now.AddMinutes(10))},\"Node\":\"SolNode1\",\"MissionType\":\"MT_DEFENSE\",\"Modifier\":\"VoidT3\",\"Hard\":false}}]}}";
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });
     }
 }

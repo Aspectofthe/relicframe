@@ -14,6 +14,7 @@ The executable is C#/.NET 10, using Discord.Net 3.20.1. It does not run Python, 
 - Background Riven scans that evaluate every catalog family against stat-search results, disk-backed deduplication, saved candidate indexes, bounded weekly history, stop/restart and seller/listing links. Search-result caps mean **not every listing is available**; the bot must not claim otherwise.
 - Manual-trait companion appraisal from existing private JSONL evidence, distinguishing current versus historical evidence and listings versus confirmed sales. Natural-color rarity classification from supplied names.
 - A test-guild Discord preview with immediate deferred acknowledgement, two calculation workers, a bounded queue, and a separate fast status command.
+- Test-guild world feeds: automatic `WARFRAME LIVE` setup, the requested visible channel names, persistent role buttons, all base/Arbitration/fissure-tier roles, one-minute background updates, per-channel replacement pings, Cascade split by normal/Steel Path, `Lvl <grade> tier` fissure labels, and fresh official-DE fissure fallback when the translated source is stale.
 
 The tests contain 2,845 synthetic cross-language cases, plus injected HTTP/lifecycle/storage tests. Passing these tests does not certify the unported features or real Discord operation.
 
@@ -61,8 +62,9 @@ Available test commands:
 - `/rf-riven flips`: page all cached candidates with weapon/budget/ROI/online filters; includes rolls, links and copyable whispers.
 - `/rf-riven price`, `top`, `guide`: weekly aggregates and usage instructions.
 - `/rf-companion`: manually supply natural traits; requires private evidence copied separately.
+- `/rf-world setup`, `refresh`, `start`, `stop`, `status`, `help`: repair and control the C# world boards. Setup/start/stop/refresh require Manage Server; setup also requires the bot to have Manage Channels and Manage Roles.
 
-Refinement defaults to Radiant. A relic refresh sweeps its required books, then waits five minutes; this is **not** the requested production one-minute live-panel scheduler yet. Riven scans wait 15 minutes between passes. `/rf-status` remains outside the calculation queue. No command automatically sends messages to sellers, purchases anything or emits role pings.
+Refinement defaults to Radiant. A relic refresh sweeps its required books, then waits five minutes; saved relic result panels and their requested one-minute filter scheduler are not ported yet. World boards poll each minute. Riven scans wait 15 minutes between passes. `/rf-status` remains outside the calculation queue. No command automatically sends messages to sellers or purchases anything. World role pings are opt-in, baseline on first observation, and emitted only for newly observed signatures.
 
 ## Memory measurements and limits
 
