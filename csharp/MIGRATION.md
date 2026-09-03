@@ -27,8 +27,8 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 - DiscordChatExporter HTML/JSON evidence ingestion and `companion_chat_importer` TXT/image portable archives are now ported as offline C# tools. The supplied 3,900-message JSON export matched all Python aggregate counts; giant historical HTML still needs streaming/peak-memory validation.
 - `companion_vision`: screenshot identification. The preview does not infer reliable natural colors, build or pattern from an image. No paid API or made-up local model has been substituted.
 - `import_riven_roll_rules`: source-workbook importer. Companion usage, price factors, historical examples and natural-color tiers now have an in-bot guide, though its richer multi-embed presentation is not duplicated yet.
-- `discord_webhook`, `formatting`, `local_env`: legacy integrations, presentation parity and deployment/environment migration.
-- `main`, `profile_memory` and root Python hosting entry point: desktop GUI/diagnostic tools and production launch scripts remain Python. The new executable is not selected by them.
+- `discord_webhook`, `formatting`, `local_env`: legacy integrations and remaining presentation parity.
+- `main`, `profile_memory` and root Python hosting entry point: desktop GUI/diagnostic tools and production launch scripts remain Python. An isolated C# preview Dockerfile/Compose definition exists, but the new executable is not selected by the existing Python host.
 
 ## Verification completed
 
@@ -45,6 +45,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 - Network-free WebSocket route filtering, tracked item-ID mapping, malformed/unrelated event rejection, and atomic new-order insertion without falsely refreshing the full-book timestamp.
 - Discord export parsing, price/trait classification, deduplication and appraiser-compatible evidence generation; the supplied current-market export matched the Python analyzer's 3,900 messages, 11,310 attachments, 2,391 classified rows and 1,413 unique evidence rows.
 - Offline memory benchmark. No full Discord/load/container soak test yet.
+- Static Linux preview container/Compose packaging with an allowlisted build context and persistent C# state volume. Docker is unavailable on this workstation, so the image itself is not yet built or runtime-validated.
 
 ## Required release gates
 

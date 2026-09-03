@@ -1,0 +1,15 @@
+services:
+  relicframe-csharp-preview:
+    build:
+      context: ..
+      dockerfile: csharp/Dockerfile
+    restart: unless-stopped
+    environment:
+      RELICFRAME_CSHARP_TOKEN: ${RELICFRAME_CSHARP_TOKEN:?set in host secrets}
+      RELICFRAME_TEST_GUILD_ID: ${RELICFRAME_TEST_GUILD_ID:?set in host secrets}
+      RELICFRAME_WFM_WEBSOCKET: ${RELICFRAME_WFM_WEBSOCKET:-false}
+    volumes:
+      - relicframe-csharp-state:/data
+
+volumes:
+  relicframe-csharp-state:

@@ -102,3 +102,14 @@ Workstation GC is enabled. API bodies are capped at 8 MiB each; concurrency defa
 ## Before production cutover
 
 Finish the migration checklist, test permissions and interactions in a test guild, publish for the target host, then run a full-feed soak test under that host's actual CPU/RAM limits. Confirm persistence, graceful shutdown, restart, reconnect and ping deduplication before replacing Python. A Python-only startup/container cannot run this executable merely by renaming it.
+
+## Isolated Linux preview container
+
+The preview has a multi-stage .NET 10 container that copies only explicitly listed public data. The Docker context denylist prevents private breeding exports, runtime state, environment files and keys from entering the image. From the repository root:
+
+```bash
+docker build -f csharp/Dockerfile -t relicframe-csharp-preview .
+docker run --rm -e RELICFRAME_CSHARP_TOKEN -e RELICFRAME_TEST_GUILD_ID -v relicframe-csharp-state:/data relicframe-csharp-preview
+```
+
+Or run `docker compose -f csharp/compose.preview.yaml up --build`. Keep using a separate test bot/server. The persistent `/data` volume retains only C# cache and control state across restarts. Private companion evidence is intentionally absent; copy reviewed evidence into a separately mounted data directory only during the later migration test. This image does not make a Python-only hosting plan support .NET.
