@@ -9,6 +9,12 @@
 !/ALL weapons.txt
 !/Untitled.txt
 !/relicframe/
+!/csharp/
+/csharp/**/bin/
+/csharp/**/obj/
+/csharp/**/publish/
+/csharp/fixtures.generated.json
+/csharp/runtime/
 
 /relicframe/*
 !/relicframe/*.py
