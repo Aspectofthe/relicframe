@@ -66,6 +66,11 @@ using (var doc = JsonDocument.Parse("[{\"id\":\"1\",\"platinum\":3.125,\"note\":
     {
         for (var i = 0; i < 100; i++) { book.Replace(doc.RootElement); using var d = book.Read(); Compare(doc.RootElement, d.RootElement, "concurrent book"); }
     })));
+    using var created = JsonDocument.Parse("{\"id\":\"2\",\"itemId\":\"item-123\",\"type\":\"sell\",\"platinum\":2}");
+    var router = new WfmWebSocket(new Dictionary<string, string> { ["item-123"] = "tracked" }, new HashSet<string> { "tracked" }, (_, order) => book.ApplyCreated(order));
+    Assert(router.Handle("{\"route\":\"@wfm|event/subscriptions/newOrder\",\"payload\":" + created.RootElement.GetRawText() + "}"), "WebSocket routes tracked item IDs");
+    Assert(!router.Handle("{\"route\":\"@wfm|event/heartbeat\",\"payload\":{\"itemId\":\"item-123\"}}"), "WebSocket ignores non-order routes");
+    using var updated = book.Read(); Assert(updated.RootElement.GetArrayLength() == 2 && book.FetchedAt.HasValue, "new-order event atomically augments full book without losing reconciliation timestamp");
 }
 var handler = new FakeHandler();
 using (var http = new MarketHttp(handler, 2, 200))

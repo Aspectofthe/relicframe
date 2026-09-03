@@ -72,6 +72,18 @@ public sealed class OrderBook
         var packed = Pack(JsonSerializer.SerializeToUtf8Bytes(rows));
         Interlocked.Exchange(ref state, new(packed, DateTimeOffset.UtcNow));
     }
+    public void ApplyCreated(JsonElement order)
+    {
+        if (order.ValueKind != JsonValueKind.Object || order.Get("id").Text().Length == 0) return;
+        var prior = Volatile.Read(ref state); using var current = Read(); using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartArray(); var id = order.Get("id").Text();
+            foreach (var row in current.RootElement.Rows()) if (!row.Get("id").Text().Equals(id, StringComparison.Ordinal)) row.WriteTo(writer);
+            order.WriteTo(writer); writer.WriteEndArray();
+        }
+        Interlocked.Exchange(ref state, new(Pack(buffer.ToArray()), prior.FetchedAt));
+    }
     public JsonDocument Read()
     {
         using var input = new MemoryStream(Volatile.Read(ref state).Packed, false);

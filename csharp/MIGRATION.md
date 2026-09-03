@@ -7,7 +7,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 | Python area | C# replacement | Remaining parity work |
 | --- | --- | --- |
 | `relic_data`, `analysis`, `relic_row`, `ranking`, `filtering` | `Relics.cs`, `RelicRanking.cs` | Full presentation metadata, remaining analysis helpers, richer comparison UI |
-| `order_math`, `order_book`, `rate_limiter`, `http_client` | `OrderBook.cs`, `MarketHttp.cs` | WebSocket incremental ingestion, production reconciliation metrics |
+| `order_math`, `order_book`, `rate_limiter`, `http_client`, `reconciler`, `ws_client` | `OrderBook.cs`, `MarketHttp.cs`, `WfmWebSocket.cs` | Production reconciliation metrics and live outage/reconnect soak |
 | `live_market`, `wfm_api`, `item_catalog_cache`, `slug_registry`, `seller_blacklist` | `LiveMarket.cs`, `SellerBlacklist.cs` | Full catalog/drop-table refresh, WebSocket reconciliation, production state compatibility |
 | `riven_roll_rules` | `RivenRules.cs` | Workbook re-import utility |
 | `riven_market`, `auction_pool` | `RivenPricing.cs`, `RivenMarket.cs`, `PublicPayload.cs` | Variant-family lookup parity, per-weapon auction queries, all original command options, real-feed validation |
@@ -22,7 +22,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 
 - Remaining `world_state`, `discord_world_state` enrichment: browse.wf regions/challenges/Steel Path Incursion schedule, official-DE repair for non-fissure sections, detailed bounty rows and custom guild emoji lookup. Channels, roles, schedule tiers, Cascade split, stale-fissure fallback and persistent signature deduplication now have C# implementations, but have not been live-guild tested.
 - Remaining `discord_automation`, `discord_live_lists`, `bot_guide` parity: richer legacy presentation and live-guild migration/permission/reconnect validation. C# now provisions the requested world channels and roles plus a guide, and provides a saved Radiant-default relic panel with persisted filters, one-minute rendering, and start/stop controls.
-- `ws_client`, `reconciler`, `state`: gateway-driven order updates, staleness repair and compatible production caches/state.
+- Remaining `state` compatibility: Python cache migration and richer reconciliation metrics. C# now bootstraps full books, smooths stalest-first REST sweeps and optionally routes documented new-order WebSocket events by catalog item ID.
 - `parse_official_drops`, `fetch_relic_data`, `wfinfo_data`, `vault_status`: complete automatic drop-table/catalog/vault refresh. C# currently reads the supplied relic CSV; only the ducat-map portion of WFInfo is used live.
 - DiscordChatExporter HTML/JSON evidence ingestion and `companion_chat_importer` TXT/image portable archives are now ported as offline C# tools. The supplied 3,900-message JSON export matched all Python aggregate counts; giant historical HTML still needs streaming/peak-memory validation.
 - `companion_vision`: screenshot identification. The preview does not infer reliable natural colors, build or pattern from an image. No paid API or made-up local model has been substituted.
@@ -42,6 +42,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 - Synthetic relic service, catalog resolution, ducat fallback, seller exclusions, cancelled refresh, real snapshot timestamps and failed-fetch reporting.
 - Synthetic rendering for every world channel, Arbitration schedule/tier matching, normal/Steel Cascade and all tier signatures, stale-source wording, and official-DE fissure normalization.
 - Persistent relic-panel Radiant defaults and saved-filter selection.
+- Network-free WebSocket route filtering, tracked item-ID mapping, malformed/unrelated event rejection, and atomic new-order insertion without falsely refreshing the full-book timestamp.
 - Discord export parsing, price/trait classification, deduplication and appraiser-compatible evidence generation; the supplied current-market export matched the Python analyzer's 3,900 messages, 11,310 attachments, 2,391 classified rows and 1,413 unique evidence rows.
 - Offline memory benchmark. No full Discord/load/container soak test yet.
 

@@ -14,18 +14,22 @@ public sealed class LiveMarket : IAsyncDisposable
     private readonly ConcurrentDictionary<string, OrderBook> books = new(StringComparer.Ordinal);
     private IReadOnlyDictionary<string, string> names = new Dictionary<string, string>();
     private IReadOnlyDictionary<string, int> ducats = new Dictionary<string, int>();
+    private IReadOnlyDictionary<string, string> idToSlug = new Dictionary<string, string>();
     private string[] required = [];
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private CancellationTokenSource? cancellation;
     private Task? worker;
     private readonly string catalogPath;
+    private readonly bool enableWebSocket;
+    private WfmWebSocket? webSocket;
     private string status = "stopped";
     public SellerBlacklist Blacklist { get; }
     public string Status => Volatile.Read(ref status);
     public int ReadyBooks => books.Values.Count(b => b.FetchedAt.HasValue);
     public int TotalBooks => required.Length;
-    public LiveMarket(MarketHttp http, IReadOnlyDictionary<string, Relic> relics, string runtimePath)
-    { this.http = http; this.relics = relics; catalogPath = Path.Combine(runtimePath, "catalog.json"); Blacklist = new(Path.Combine(runtimePath, "seller_blacklist.json")); }
+    public string WebSocketStatus => !enableWebSocket ? "disabled" : webSocket?.Connected == true ? "connected" : "reconnecting/REST-only";
+    public LiveMarket(MarketHttp http, IReadOnlyDictionary<string, Relic> relics, string runtimePath, bool enableWebSocket = false)
+    { this.http = http; this.relics = relics; this.enableWebSocket = enableWebSocket; catalogPath = Path.Combine(runtimePath, "catalog.json"); Blacklist = new(Path.Combine(runtimePath, "seller_blacklist.json")); }
     public async Task StartAsync(bool forceCatalog, CancellationToken lifetime)
     {
         await lifecycle.WaitAsync(lifetime);
@@ -63,12 +67,12 @@ public sealed class LiveMarket : IAsyncDisposable
                 try { doc = await http.GetJsonAsync("https://api.warframe.market/v2/items", ct); Json.WriteAtomic(catalogPath, doc.RootElement); }
                 catch (HttpRequestException) when (File.Exists(catalogPath)) { doc = JsonDocument.Parse(await File.ReadAllTextAsync(catalogPath, ct)); }
             }
-            var nextNames = new Dictionary<string, string>(); var nextDucats = new Dictionary<string, int>();
+            var nextNames = new Dictionary<string, string>(); var nextDucats = new Dictionary<string, int>(); var nextIds = new Dictionary<string, string>();
             foreach (var row in doc.RootElement.Get("data").Rows())
             {
                 var name = row.Get("i18n").Get("en").Get("name").Text().Trim().ToLowerInvariant();
                 var slug = row.Get("slug").Text(); if (name.Length == 0 || slug.Length == 0) continue;
-                nextNames[name] = slug; if (row.Get("ducats").Number() is { } d) nextDucats[name] = (int)d;
+                nextNames[name] = slug; var id = row.Get("id").Text(); if (id.Length > 0) nextIds[id] = slug; if (row.Get("ducats").Number() is { } d) nextDucats[name] = (int)d;
             }
             if (nextNames.Count == 0) throw new InvalidDataException("Empty marketplace catalog");
             // v2 catalogs may omit ducats; the same WFInfo equipment source used by Python fills that gap.
@@ -91,7 +95,7 @@ public sealed class LiveMarket : IAsyncDisposable
             }
             catch (Exception e) when (!ct.IsCancellationRequested && e is HttpRequestException or JsonException or TaskCanceledException)
             { Console.WriteLine($"[ducats] {e.GetType().Name}; cached values retained where available"); }
-            names = nextNames; ducats = nextDucats;
+            names = nextNames; ducats = nextDucats; idToSlug = nextIds;
             required = relics.Values.SelectMany(r => r.Rewards.Select(reward => Resolve(reward.RewardName)).Append(Resolve(r.RelicName, true)))
                 .Where(s => s is not null).Select(s => s!).Distinct().Order(StringComparer.Ordinal).ToArray();
         }
@@ -107,28 +111,39 @@ public sealed class LiveMarket : IAsyncDisposable
         try
         {
             await LoadCatalogAsync(force, ct);
+            webSocket = new(idToSlug, required.ToHashSet(StringComparer.Ordinal), (slug, order) => books.GetOrAdd(slug, _ => new OrderBook()).ApplyCreated(order));
+            var webSocketTask = enableWebSocket && idToSlug.Count > 0 ? webSocket.RunAsync(ct) : Task.CompletedTask;
+            var failures = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+            Volatile.Write(ref status, "refreshing");
+            await Parallel.ForEachAsync(required, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (slug, token) =>
+            {
+                if (await FetchBookAsync(slug, token)) failures.TryRemove(slug, out _); else failures[slug] = "fetch failed";
+            });
+            Volatile.Write(ref status, failures.IsEmpty ? "ready" : $"partial: {failures.Count} failed books; older data retained where available");
             while (!ct.IsCancellationRequested)
             {
-                Volatile.Write(ref status, "refreshing");
-                var failures = 0;
-                await Parallel.ForEachAsync(required, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (slug, token) =>
-                {
-                    try
-                    {
-                        using var doc = await http.GetJsonAsync("https://api.warframe.market/v2/orders/item/" + Uri.EscapeDataString(slug), token);
-                        var rows = doc.RootElement.Get("data");
-                        if (rows.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Missing order array");
-                        var book = books.GetOrAdd(slug, _ => new OrderBook()); book.Replace(rows);
-                    }
-                    catch (Exception e) when (e is HttpRequestException or JsonException or InvalidDataException or TaskCanceledException && !token.IsCancellationRequested)
-                    { Interlocked.Increment(ref failures); Console.WriteLine($"[market] {slug}: {e.GetType().Name}; old book retained, if any"); }
-                });
-                Volatile.Write(ref status, failures == 0 ? "ready" : $"partial: {failures} failed books; older data retained where available");
-                await Task.Delay(TimeSpan.FromMinutes(5), ct);
+                if (required.Length == 0) { await Task.Delay(TimeSpan.FromSeconds(30), ct); continue; }
+                // Smooth the full reconciliation across five minutes instead of producing a periodic API burst.
+                var slug = required.OrderBy(item => books.TryGetValue(item, out var book) ? book.FetchedAt ?? DateTimeOffset.MinValue : DateTimeOffset.MinValue).First();
+                if (await FetchBookAsync(slug, ct)) failures.TryRemove(slug, out _); else failures[slug] = "fetch failed";
+                Volatile.Write(ref status, failures.IsEmpty ? "ready" : $"partial: {failures.Count} failed books; older data retained where available");
+                await Task.Delay(TimeSpan.FromMinutes(5).TotalMilliseconds / required.Length < 50 ? TimeSpan.FromMilliseconds(50) : TimeSpan.FromMinutes(5) / required.Length, ct);
             }
+            await webSocketTask;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception e) { Volatile.Write(ref status, "failed: " + e.GetType().Name); Console.WriteLine($"[market] worker failed: {e.GetType().Name}"); }
+    }
+    private async Task<bool> FetchBookAsync(string slug, CancellationToken ct)
+    {
+        try
+        {
+            using var doc = await http.GetJsonAsync("https://api.warframe.market/v2/orders/item/" + Uri.EscapeDataString(slug), ct);
+            var rows = doc.RootElement.Get("data"); if (rows.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Missing order array");
+            books.GetOrAdd(slug, _ => new OrderBook()).Replace(rows); return true;
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested && e is HttpRequestException or JsonException or InvalidDataException or TaskCanceledException)
+        { Console.WriteLine($"[market] {slug}: {e.GetType().Name}; old book retained, if any"); return false; }
     }
     public OrderMatch Match(string name, string? tier, bool online, bool relic = false)
     {

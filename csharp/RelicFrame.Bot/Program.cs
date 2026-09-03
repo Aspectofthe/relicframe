@@ -43,7 +43,7 @@ var relics = Relic.LoadCsv(Path.Combine(dataPath, "relics_from_official_data.csv
 using var lifetime = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; lifetime.Cancel(); };
 using var http = new MarketHttp();
-await using var market = new LiveMarket(http, relics, runtimePath);
+await using var market = new LiveMarket(http, relics, runtimePath, string.Equals(Environment.GetEnvironmentVariable("RELICFRAME_WFM_WEBSOCKET"), "true", StringComparison.OrdinalIgnoreCase));
 await using var rivens = new RivenMarket(http, runtimePath, Path.Combine(dataPath, "rivens", "roll_rules.json"));
 var tradeChat = new RivenTradeChat(Path.Combine(runtimePath, "riven_trade_chat.jsonl"), rivens.WeaponNames);
 using var socket = new DiscordSocketClient(new DiscordSocketConfig
@@ -83,7 +83,7 @@ socket.SlashCommandExecuted += async command =>
     {
         using var process = Process.GetCurrentProcess();
         await command.RespondAsync($"C# preview is responding. Gateway latency: {socket.Latency} ms.\n" +
-            $"RAM: {process.WorkingSet64 / 1048576d:F1} MiB. Market: {market.Status}; books {market.ReadyBooks}/{market.TotalBooks}.\n" +
+            $"RAM: {process.WorkingSet64 / 1048576d:F1} MiB. Market: {market.Status}; books {market.ReadyBooks}/{market.TotalBooks}; WebSocket {market.WebSocketStatus}.\n" +
             $"Rivens: {rivens.Status}.\nWorld: {world.Status}. Panel: {panel.Status}.", ephemeral: true, allowedMentions: AllowedMentions.None);
         return;
     }

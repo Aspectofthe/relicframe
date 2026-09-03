@@ -10,6 +10,7 @@ The executable is C#/.NET 10, using Discord.Net 3.20.1. It does not run Python, 
 - Seven ranking modes, seller availability/vault/ROI/cost/reward filters and persisted seller exclusions applied before calculation.
 - Compressed full order records, atomic snapshots, shared 5-request/second HTTP pacing, bounded concurrency, deadlines, retry/backoff and cancellation. No arbitrary top-N truncation of an order book.
 - Background relic-market refresh with catalog caching, ducat fallback, retained old data and honest timestamps after failed fetches.
+- Smoothed stalest-book REST reconciliation across each five-minute sweep, plus an optional bounded Warframe.market `newOrders` WebSocket latency layer. REST remains authoritative because the public stream does not report every third-party close/edit.
 - Riven stat ranges, numerical roll quality, supplied curated roll rules, comparable-ask deal scoring and official weekly trade ceilings.
 - Background Riven scans that evaluate every catalog family against stat-search results, disk-backed deduplication, saved candidate indexes, bounded weekly history, stop/restart and seller/listing links. Search-result caps mean **not every listing is available**; the bot must not claim otherwise.
 - Explicit manual Riven trade-chat text imports with local deduplication and offer summaries. These are offers, not confirmed sales; there is no passive game-chat interception.
@@ -57,6 +58,7 @@ Use a **separate Discord test application** and a disposable test server. Do not
 | `RELICFRAME_TEST_GUILD_ID` | Selected test server; required only with `--test-bot` |
 | `RELICFRAME_DATA_DIR` | Public data and optionally private evidence directory; default `relicframe/data` |
 | `RELICFRAME_RUNTIME_DIR` | Writable C#-only cache/state directory; default `csharp/runtime` |
+| `RELICFRAME_WFM_WEBSOCKET` | Optional `true` enables WFM's global new-order stream; REST remains authoritative |
 
 Do not point the runtime directory at Python's working directory or private export directories. The C# preview does not load `.env`, register global commands, delete Python commands, migrate production role/channel IDs or automatically start scans.
 
