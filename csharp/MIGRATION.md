@@ -14,14 +14,15 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 | `companion_appraisal`, color rarity from `companion_vision` | `Companions.cs` | Differential appraisal tests against broader evidence, complete guide and screenshot workflow |
 | Parts of `bot`, `diagnostics`, `memory_usage`, `workload` | `RelicFrame.Bot` | Production command parity and workload soak tests |
 | Major `world_state`, `discord_world_state` paths | `WorldState.cs`, `WorldManager.cs` | Full static browse.wf enrichment, official fallback for non-fissure sections, detailed bounty/Steel Path rendering and live Discord permission/reconnect soak |
+| Saved relic result panels | `RelicPanel.cs`, `RelicPanelManager.cs` | Live Discord permission/restart soak and richer presentation metadata |
+| `riven_trade_chat` | `RivenTradeChat.cs` | Broader real-export validation; deliberately no passive game-chat interception |
 
 ## Not ported — do not remove the Python implementation
 
 - Remaining `world_state`, `discord_world_state` enrichment: browse.wf regions/challenges/Steel Path Incursion schedule, official-DE repair for non-fissure sections, detailed bounty rows and custom guild emoji lookup. Channels, roles, schedule tiers, Cascade split, stale-fissure fallback and persistent signature deduplication now have C# implementations, but have not been live-guild tested.
-- `discord_automation`, `discord_live_lists`, `bot_guide`: startup/guild-join provisioning, channel renames/migration, full feature guide channel, saved relic panels, one-minute default refresh and restart-with-filters controls.
+- Remaining `discord_automation`, `discord_live_lists`, `bot_guide` parity: richer legacy presentation and live-guild migration/permission/reconnect validation. C# now provisions the requested world channels and roles plus a guide, and provides a saved Radiant-default relic panel with persisted filters, one-minute rendering, and start/stop controls.
 - `ws_client`, `reconciler`, `state`: gateway-driven order updates, staleness repair and compatible production caches/state.
 - `parse_official_drops`, `fetch_relic_data`, `wfinfo_data`, `vault_status`: complete automatic drop-table/catalog/vault refresh. C# currently reads the supplied relic CSV; only the ducat-map portion of WFInfo is used live.
-- `riven_trade_chat`: explicit manual imports, deduplication and observation summaries. No passive game-chat interception is planned or claimed.
 - `companion_chat_importer`, `companion_export_analyzer`: HTML/JSON export and asset ingestion. Existing generated JSONL is readable; raw export processing is not ported.
 - `companion_vision`: screenshot identification. The preview does not infer reliable natural colors, build or pattern from an image. No paid API or made-up local model has been substituted.
 - `companion_guide`, `import_riven_roll_rules`: complete reference/help presentation and source-workbook importer.
@@ -31,7 +32,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 ## Verification completed
 
 - Release builds of Core, Bot and Tests with warnings treated as errors.
-- 2,845 deterministic synthetic Python/C# comparisons: relic calculations, order normalization/purchasing, curated rules, color rarity, Riven ranges/roll quality/deals, ranking/filtering/risk/category behavior.
+- 2,851 deterministic synthetic Python/C# comparisons: relic calculations, order normalization/purchasing, curated rules, color rarity, Riven ranges/roll quality/deals, trade-offer parsing/summaries, ranking/filtering/risk/category behavior.
 - Concurrent lossless compressed snapshots.
 - HTTP pacing/concurrency, caller cancellation and 429/503 retry tests using injected handlers.
 - Safe JSON/object-literal parsing, rejecting executable expressions.
@@ -39,6 +40,7 @@ Status: **preview, incomplete**. No production cutover, Discord login or channel
 - Synthetic end-to-end Riven scan, all catalog families visited, full roll values saved, index reload and cancellation without publishing incomplete results as a complete index.
 - Synthetic relic service, catalog resolution, ducat fallback, seller exclusions, cancelled refresh, real snapshot timestamps and failed-fetch reporting.
 - Synthetic rendering for every world channel, Arbitration schedule/tier matching, normal/Steel Cascade and all tier signatures, stale-source wording, and official-DE fissure normalization.
+- Persistent relic-panel Radiant defaults and saved-filter selection.
 - Offline memory benchmark. No full Discord/load/container soak test yet.
 
 ## Required release gates

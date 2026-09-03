@@ -9,10 +9,12 @@ internal static class RivenCommands
     public static ApplicationCommandProperties Build()
     {
         var group = new SlashCommandBuilder().WithName("rf-riven").WithDescription("C# preview: Riven resale candidates, not guaranteed profit");
-        foreach (var name in new[] { "refresh", "stop", "flips", "price", "top", "guide" })
+        foreach (var name in new[] { "refresh", "stop", "flips", "price", "top", "chatlog", "chatstats", "guide" })
         {
             var sub = new SlashCommandOptionBuilder().WithName(name).WithDescription($"Riven {name}").WithType(ApplicationCommandOptionType.SubCommand);
             if (name == "price") sub.AddOption("weapon", ApplicationCommandOptionType.String, "Weapon family", true);
+            if (name == "chatlog") sub.AddOption("text", ApplicationCommandOptionType.String, "Explicitly copied/OCR WTS, WTB or WTT lines", true, minLength: 1, maxLength: 6000);
+            if (name == "chatstats") { sub.AddOption("weapon", ApplicationCommandOptionType.String, "Optional weapon family"); sub.AddOption("days", ApplicationCommandOptionType.Integer, "Last 1–90 days", minValue: 1, maxValue: 90); }
             if (name == "flips")
             {
                 sub.AddOption("page", ApplicationCommandOptionType.Integer, "Two full rolls per page", minValue: 1);
@@ -25,7 +27,7 @@ internal static class RivenCommands
         }
         return group.Build();
     }
-    public static async Task<string> ExecuteAsync(SocketSlashCommand command, RivenMarket market, CancellationToken ct)
+    public static async Task<string> ExecuteAsync(SocketSlashCommand command, RivenMarket market, RivenTradeChat chat, CancellationToken ct)
     {
         var sub = command.Data.Options.Single();
         string Get(string name, string fallback = "") => sub.Options.FirstOrDefault(o => o.Name == name)?.Value?.ToString() ?? fallback;
@@ -38,7 +40,21 @@ internal static class RivenCommands
         if (sub.Name == "guide") return "Start /rf-riven refresh (Manage Server), then use /rf-riven flips with page, weapon, budget and ROI filters.\n" +
             "Candidates require curated desired stats, a harmless negative and at least three comparable asks. Projected resale is 90% of the weighted comparable median, capped by official weekly trade evidence when available.\n" +
             "Every catalog family is evaluated, but Warframe.market caps searches: this is not every listing or a guaranteed sale. The weekly feed is completed-trade data without exact rolls; live listings are asking prices.\n" +
-            "Click the listing/seller link or copy the /w text into Warframe yourself. The bot never buys or messages sellers. Stop scanning with /rf-riven stop.";
+            "Click the listing/seller link or copy the /w text into Warframe yourself. The bot never buys or messages sellers. Stop scanning with /rf-riven stop.\n" +
+            "Use /rf-riven chatlog only for text you explicitly copied or OCR-extracted; /rf-riven chatstats summarizes those local offer observations. There is no public Warframe trade-chat feed and the bot does not silently intercept the game.";
+        if (sub.Name == "chatlog")
+        {
+            var imported = chat.Import(Get("text"), source: "manual-discord");
+            return $"Stored {imported.Added.Length} offer observations; {imported.DuplicateCount} daily duplicates; {imported.UnparsedLineCount} unparsed lines.\n" +
+                "WTS/WTB/WTT text is asking/interest evidence, never recorded as a confirmed sale. Stored in the private C# runtime only.";
+        }
+        if (sub.Name == "chatstats")
+        {
+            var days = int.TryParse(Get("days", "30"), out var parsedDays) ? parsedDays : 30; var weapon = Get("weapon");
+            var rows = chat.Recent(weapon.Length > 0 ? weapon : null, days); if (rows.Length == 0) return $"No imported offer observations in the last {days} days. Use /rf-riven chatlog first.";
+            var stats = RivenTradeChat.Summary(rows); string P(double? value) => value?.ToString("0.##", CultureInfo.InvariantCulture) + "p" ?? "unknown";
+            return $"{stats.Observations} observations{(weapon.Length > 0 ? " for " + weapon : "")} over {days} days.\nWTS: {stats.WtsCount}; min {P(stats.WtsMin)}; median {P(stats.WtsMedian)}.\nWTB: {stats.WtbCount}; max {P(stats.WtbMax)}; median {P(stats.WtbMedian)}.\nPossible ask/bid spread: {P(stats.PossibleSpread)}. Offer text is not completed-sale data.";
+        }
         if (sub.Name is "price" or "top")
         {
             var rows = market.Weekly;

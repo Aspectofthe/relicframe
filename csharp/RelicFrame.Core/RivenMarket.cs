@@ -61,6 +61,7 @@ public sealed class RivenMarket : IAsyncDisposable
     private readonly MarketHttp http;
     private readonly string runtime;
     private readonly Dictionary<string, RollRule> rules = new(StringComparer.Ordinal);
+    private readonly List<string> weaponNames = [];
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private CancellationTokenSource? cancellation;
     private Task? worker;
@@ -70,13 +71,14 @@ public sealed class RivenMarket : IAsyncDisposable
     public RivenIndex Index => Volatile.Read(ref index);
     public string Status => Volatile.Read(ref status);
     public IReadOnlyList<JsonElement> Weekly => Volatile.Read(ref weekly);
+    public IReadOnlyList<string> WeaponNames => weaponNames;
     public RivenMarket(MarketHttp http, string runtime, string? rulePath = null)
     {
         this.http = http; this.runtime = Path.Combine(Path.GetFullPath(runtime), "rivens");
         if (rulePath is not null && File.Exists(rulePath))
         {
             using var file = File.OpenRead(rulePath); using var doc = JsonDocument.Parse(file);
-            foreach (var row in doc.RootElement.Get("rows").Rows()) rules[RivenPricing.Key(row.Get("weapon").Text())] = RivenRules.Read(row);
+            foreach (var row in doc.RootElement.Get("rows").Rows()) { var weapon = row.Get("weapon").Text(); if (weapon.Length == 0) continue; rules[RivenPricing.Key(weapon)] = RivenRules.Read(row); weaponNames.Add(weapon); }
         }
         var path = Path.Combine(this.runtime, "flip_index.json");
         if (File.Exists(path))

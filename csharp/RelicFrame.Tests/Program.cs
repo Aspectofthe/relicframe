@@ -23,6 +23,12 @@ foreach (var test in fixture.RootElement.EnumerateArray())
             _ => relic.Compare(prices, cost, rate)
         };
     }
+    else if (kind == "trade_parse")
+    {
+        var chat = new RivenTradeChat(Path.Combine(Path.GetTempPath(), "unused-test-log.jsonl"), test.Get("weapons").Rows().Select(v => v.Text()));
+        var parsed = chat.Parse(test.Get("text").Text(), DateTimeOffset.Parse(test.Get("observed").Text()), "synthetic");
+        actual = new { offers = parsed.Offers, unparsed = parsed.Unparsed, summary = RivenTradeChat.Summary(parsed.Offers) };
+    }
     else if (kind == "ranking")
     {
         var scope = test.Get("scope").Text(); var tier = Enum.Parse<Refinement>(test.Get("tier").Text(), true);
@@ -133,6 +139,13 @@ try
         Assert(retryHandler.Calls == 3 && result.RootElement.Get("ok").Bool(), "429 and 503 retry successfully");
     }
     var catalogRelics = new Dictionary<string, Relic> { ["Lith Test"] = new("Lith Test", [new("Reward", "rare")]) };
+    var panelSnapshot = new MarketSnapshot(DateTimeOffset.UtcNow, Refinement.Radiant,
+        new Dictionary<string, double?> { ["reward"] = 20 },
+        new Dictionary<string, PriceInfo> { ["Lith Test"] = new(10, 10, true, false, 10, 10) },
+        new Dictionary<string, int> { ["reward"] = 100 }, 2, 2);
+    var panelRows = RelicPanel.Select(catalogRelics, panelSnapshot, new RelicPanelOptions());
+    Assert(panelRows.Length == 1 && Math.Abs(panelRows[0].Online.Profit.ExpectedValue - 2) < .0001, "persistent panel defaults to Radiant and selects ranked rows");
+    Assert(RelicPanel.Select(catalogRelics, panelSnapshot, new RelicPanelOptions(MinReward: 999)).Length == 0, "persistent panel applies saved filters");
     using (var marketHttp = new MarketHttp(new MarketFeedHandler(), 2, 10000))
     {
         await using var market = new LiveMarket(marketHttp, catalogRelics, Path.Combine(temp, "market"));

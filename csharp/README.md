@@ -12,6 +12,7 @@ The executable is C#/.NET 10, using Discord.Net 3.20.1. It does not run Python, 
 - Background relic-market refresh with catalog caching, ducat fallback, retained old data and honest timestamps after failed fetches.
 - Riven stat ranges, numerical roll quality, supplied curated roll rules, comparable-ask deal scoring and official weekly trade ceilings.
 - Background Riven scans that evaluate every catalog family against stat-search results, disk-backed deduplication, saved candidate indexes, bounded weekly history, stop/restart and seller/listing links. Search-result caps mean **not every listing is available**; the bot must not claim otherwise.
+- Explicit manual Riven trade-chat text imports with local deduplication and offer summaries. These are offers, not confirmed sales; there is no passive game-chat interception.
 - Manual-trait companion appraisal from existing private JSONL evidence, distinguishing current versus historical evidence and listings versus confirmed sales. Natural-color rarity classification from supplied names.
 - A test-guild Discord preview with immediate deferred acknowledgement, two calculation workers, a bounded queue, and a separate fast status command.
 - Test-guild world feeds: automatic `WARFRAME LIVE` setup, the requested visible channel names, persistent role buttons, all base/Arbitration/fissure-tier roles, one-minute background updates, per-channel replacement pings, Cascade split by normal/Steel Path, `Lvl <grade> tier` fissure labels, and fresh official-DE fissure fallback when the translated source is stale.
@@ -60,11 +61,12 @@ Available test commands:
 - `/rf-relics blacklist-add`, `blacklist-remove`, `blacklist-list`; changes require Manage Server.
 - `/rf-riven refresh` / `stop`: start/cancel the recurring scanner; requires Manage Server.
 - `/rf-riven flips`: page all cached candidates with weapon/budget/ROI/online filters; includes rolls, links and copyable whispers.
-- `/rf-riven price`, `top`, `guide`: weekly aggregates and usage instructions.
+- `/rf-riven price`, `top`, `chatlog`, `chatstats`, `guide`: weekly aggregates, explicit offer-text imports and usage instructions.
 - `/rf-companion`: manually supply natural traits; requires private evidence copied separately.
 - `/rf-world setup`, `refresh`, `start`, `stop`, `status`, `help`: repair and control the C# world boards. Setup/start/stop/refresh require Manage Server; setup also requires the bot to have Manage Channels and Manage Roles.
+- `/rf-panel setup`, `config`, `refresh`, `start`, `stop`, `status`, `help`: persistent Radiant-by-default ranking board, saved filters and its one-minute kill switch.
 
-Refinement defaults to Radiant. A relic refresh sweeps its required books, then waits five minutes; saved relic result panels and their requested one-minute filter scheduler are not ported yet. World boards poll each minute. Riven scans wait 15 minutes between passes. `/rf-status` remains outside the calculation queue. No command automatically sends messages to sellers or purchases anything. World role pings are opt-in, baseline on first observation, and emitted only for newly observed signatures.
+Refinement defaults to Radiant. A relic refresh sweeps its required books, then waits five minutes; the saved result panel renders every minute using its persisted filters, while `/rf-panel stop` is its kill switch. World boards poll each minute. Riven scans wait 15 minutes between passes. `/rf-status` remains outside the calculation queue. No command automatically sends messages to sellers or purchases anything. World role pings are opt-in, baseline on first observation, and emitted only for newly observed signatures.
 
 ## Memory measurements and limits
 
@@ -78,7 +80,7 @@ dotnet csharp/RelicFrame.Bot/bin/Release/net10.0/RelicFrame.Bot.dll --profile-ho
 Initial Windows measurements:
 
 - 500 books / 100,000 synthetic orders: 22.7 MiB baseline, 40.2 MiB retained working set, 1.090 s build and 0.560 s full-book query.
-- Disconnected preview host: 768 relics, four Discord command groups, Discord client objects and Riven rules at 42.3 MiB working set.
+- Disconnected preview host: 768 relics, six Discord command groups, Discord client objects and Riven rules at 42.3 MiB working set.
 
 These are **not full-bot or Linux-container measurements**, and must not be represented as proof of lower RAM than Python or suitability for a 256 MiB server. The disconnected profile performs no Discord login, private-evidence load or live API request.
 

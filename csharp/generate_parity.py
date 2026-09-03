@@ -19,6 +19,9 @@ from riven_market import find_riven_deals, calculate_riven_stat_ranges, auction_
 from relic_row import compute_row
 from ranking import RANK_MODES, sort_key_for_mode
 from filtering import passes_filters
+from riven_trade_chat import RivenTradeChatLog, price_summary
+from datetime import datetime, UTC
+import tempfile
 
 rng = random.Random(89213)
 cases = []
@@ -73,6 +76,20 @@ for price in [None, 0, .5, 20, 20.5, "10", "10.5", "no"]:
     for direct in [True, False]:
         a = {"buyout_price": price, "is_direct_sell": direct, "starting_price": 30}
         cases.append({"kind": "auction_price", "auction": a, "expected": auction_price(a)})
+trade_texts = [
+    "[12:34] SellerOne: WTS [Kuva Bramma] 120p",
+    "Buyer_2 WTB [Torid] 55 plat",
+    "WTS Latron 100pl",
+    "noise without an action",
+    "Trader: WTT [Kuva Bramma] [Torid] 99p",
+    "Seller: WTS [Unknown Weapon] 10p",
+]
+with tempfile.TemporaryDirectory() as trade_temp:
+    trade = RivenTradeChatLog(Path(trade_temp) / "never-written.jsonl", ["Kuva Bramma", "Torid", "Latron"])
+    stamp = datetime(2026, 1, 2, 3, 4, 5, 123456, tzinfo=UTC)
+    for text in trade_texts:
+        offers, unparsed = trade.parse(text, observed_at=stamp, source="synthetic")
+        cases.append({"kind": "trade_parse", "text": text, "observed": stamp.isoformat(), "weapons": ["Kuva Bramma", "Torid", "Latron"], "expected": {"offers": [asdict(o) for o in offers], "unparsed": unparsed, "summary": price_summary(offers)}})
 for group in range(40):
     scope = rng.choice(["Online only", "Offline only", "Both (best of either)"])
     tier = rng.choice(["intact", "exceptional", "flawless", "radiant"])
