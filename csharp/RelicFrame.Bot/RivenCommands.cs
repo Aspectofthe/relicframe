@@ -117,8 +117,11 @@ internal static class RivenCommands
         if (trade.WtsCount >= 3 && trade.WtsMedian.HasValue) anchors.Add(trade.WtsMedian.Value);
         if (anchors.Count == 0 || appraisal.RecommendedPrice <= 0) return appraisal;
         var chatAnchor = Math.Clamp(anchors.Average(), appraisal.RecommendedPrice * .35, appraisal.RecommendedPrice * 3);
-        var fair = Math.Max(1, (int)Math.Round((appraisal.RecommendedPrice * .90 + chatAnchor * .10) / 5) * 5);
-        return appraisal with { RecommendedPrice = fair, QuickPrice = Math.Max(1, (int)Math.Round(fair * .88 / 5) * 5), PatientPrice = Math.Max(1, (int)Math.Round(fair * 1.15 / 5) * 5) };
+        int Adjust(int value) => Math.Max(1, (int)Math.Round((value * .90 + chatAnchor * .10) / 5) * 5);
+        var fair = Adjust(appraisal.RecommendedPrice);
+        var quick = Math.Min(Adjust(appraisal.QuickPrice), fair > 5 ? fair - 5 : fair);
+        var patient = Math.Max(Adjust(appraisal.PatientPrice), fair + 5);
+        return appraisal with { RecommendedPrice = fair, QuickPrice = quick, PatientPrice = patient };
     }
     internal static string FormatAppraisal(RivenAppraisal appraisal, TradeChatSummary trade, TradeChatImport? imported = null)
     {
@@ -145,7 +148,7 @@ internal static class RivenCommands
               $"Supported harmless negatives: {harmless}.\n" +
               $"Assessment: **{appraisal.DesiredPositiveCount}/{appraisal.Positives.Length} desired positives** · {(appraisal.PreferredRoll == true ? "preferred selling roll" : "not a preferred selling roll")}. {appraisal.RollUsefulness}"
             : "";
-        const string disclaimer = "Exact-roll numbers are asks, not confirmed sales. The DE archive has no exact roll details and is stale; a closed listing may have sold or been withdrawn.";
+        const string disclaimer = "Fair uses the weighted 35th percentile of comparable asks; Quick/Patient use the 18th/65th percentiles. Asks are not sales. Confirmed matching sales get the strongest weight; the DE archive is stale and has no roll details.";
         var content = $"**{appraisal.WeaponName} appraisal** · {appraisal.Confidence} confidence{quality}\n{stats}\n" +
             grades + guidance + usefulness + "\n" +
             $"Quick sale: **{P(appraisal.QuickPrice)}** · Fair: **{P(appraisal.RecommendedPrice)}** · Patient: **{P(appraisal.PatientPrice)}**\n" +

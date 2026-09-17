@@ -5,7 +5,7 @@ namespace RelicFrame.Core;
 
 public sealed record WeeklyPrice(string Weapon, string RivenType, bool Rerolled, double Average, double Median,
     double Minimum, double Maximum, double StandardDeviation, double Popularity, DateTimeOffset? SourceAsOf = null);
-public sealed record RivenStatRange(string Slug, bool Positive, double Minimum, double Maximum, string Unit);
+public sealed record RivenStatRange(string Slug, bool Positive, double Minimum, double Maximum, string Unit, bool GradingAvailable = true);
 public sealed record RivenStatGrade(string Slug, bool Positive, double Value, double VariancePct, string Grade);
 public sealed record RivenAppraisal(string WeaponName, string WeaponSlug, string[] Positives, string? Negative,
     int ExactAsks, int SimilarAsks, int OnlineAsks, int? LowestAsk, int? MedianAsk, int? HighestAsk,
@@ -40,6 +40,15 @@ public sealed record RivenAskRange(int Total, int Online, int? Low, int? Median,
 
 public static class RivenPricing
 {
+    // Iceblade of Narin combined attributes are recognized before launch so OCR,
+    // marketplace payloads and saved evidence do not reject them. DE has not yet
+    // published their final numeric bases, so they remain intentionally ungraded.
+    public static readonly IReadOnlySet<string> CombinedStats = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "blast_damage", "corrosive_damage", "gas_damage", "magnetic_damage", "radiation_damage", "viral_damage",
+        "status_damage", "weak_point_damage"
+    };
+    public static IEnumerable<string> AllStats => Bases.Keys.Concat(CombinedStats).Distinct(StringComparer.Ordinal);
     public static int EndoValue(int masteryRank, int modRank, int rerolls)
     {
         if (masteryRank is < 8 or > 16) throw new ArgumentOutOfRangeException(nameof(masteryRank), "Riven Mastery Rank must be 8–16.");
@@ -90,6 +99,11 @@ public static class RivenPricing
         { (2,false) => (.99,0d), (2,true) => (1.2375,.495), (3,false) => (.75,0d), (3,true) => (.9375,.75), _ => throw new ArgumentException("Use two or three positive stats and at most one negative.") };
         RivenStatRange One(string slug, bool positive)
         {
+            if (CombinedStats.Contains(slug))
+            {
+                if (!positive) throw new ArgumentException("Combined Riven stats cannot be selected as negatives.");
+                return new(slug, true, 0, 0, "percent", GradingAvailable: false);
+            }
             if (positive && slug == "chance_to_gain_combo_count" || !positive && slug is "cold_damage" or "electric_damage" or "heat_damage" or "toxin_damage" or "punch_through" or "chance_to_gain_extra_combo_count")
                 throw new ArgumentException("Illegal positive/negative stat.");
             if (!Bases.TryGetValue(slug, out var columns) || columns[index] is not double basis) throw new ArgumentException("Stat cannot roll on this class.");
@@ -99,9 +113,16 @@ public static class RivenPricing
         }
         return positives.Select(s => One(s, true)).Concat(negative is null ? [] : new[] { One(negative, false) }).ToArray();
     }
-    public static IEnumerable<(string Slug, bool Positive, double? Value)> Attributes(JsonElement auction) =>
-        auction.Get("item").Get("attributes").Rows().Select(a => ((a.Get("url_name").Text() is { Length: > 0 } slug ? slug : a.Get("slug").Text()).Trim().ToLowerInvariant(),
-            a.Get("positive").ValueKind == JsonValueKind.Undefined ? a.Get("postive").Bool(true) : a.Get("positive").Bool(true), a.Get("value").Number())).Where(a => a.Item1.Length > 0);
+    public static IEnumerable<(string Slug, bool Positive, double? Value)> Attributes(JsonElement auction)
+    {
+        foreach (var attribute in auction.Get("item").Get("attributes").Rows())
+        {
+            var raw = (attribute.Get("url_name").Text() is { Length: > 0 } slug ? slug : attribute.Get("slug").Text()).Trim().ToLowerInvariant();
+            if (raw.Length == 0) continue;
+            try { raw = NormalizeStat(raw); } catch (ArgumentException) { }
+            yield return (raw, attribute.Get("positive").ValueKind == JsonValueKind.Undefined ? attribute.Get("postive").Bool(true) : attribute.Get("positive").Bool(true), attribute.Get("value").Number());
+        }
+    }
     public static string NormalizeStat(string value)
     {
         var key = Key(value);
@@ -111,6 +132,14 @@ public static class RivenPricing
             "heavyattackefficiency" => "channeling_efficiency",
             "additionalcombocountchance" => "chance_to_gain_extra_combo_count",
             "chancetogaincombocount" => "chance_to_gain_combo_count",
+            "blast" or "blastdamage" => "blast_damage",
+            "corrosive" or "corrosivedamage" => "corrosive_damage",
+            "gas" or "gasdamage" => "gas_damage",
+            "magnetic" or "magneticdamage" => "magnetic_damage",
+            "radiation" or "radiationdamage" => "radiation_damage",
+            "viral" or "viraldamage" => "viral_damage",
+            "statusdamage" => "status_damage",
+            "weakpointdamage" or "weakspotdamage" or "headshotdamage" => "weak_point_damage",
             _ => null
         };
         if (modern is not null) return modern;
@@ -127,15 +156,24 @@ public static class RivenPricing
         "chance_to_gain_combo_count" => "Chance to Gain Combo Count",
         "base_damage_/_melee_damage" => "Damage / Melee Damage",
         "fire_rate_/_attack_speed" => "Fire Rate / Attack Speed",
+        "weak_point_damage" => "Weak Point Damage",
+        "blast_damage" => "Blast Damage",
+        "corrosive_damage" => "Corrosive Damage",
+        "gas_damage" => "Gas Damage",
+        "magnetic_damage" => "Magnetic Damage",
+        "radiation_damage" => "Radiation Damage",
+        "viral_damage" => "Viral Damage",
+        "status_damage" => "Status Damage",
         _ => System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(slug.Replace('_', ' '))
     };
     public static string[] AllowedStats(string statClass, bool positive)
     {
         var index = Array.IndexOf(new[] { "rifle", "shotgun", "pistol", "archgun", "melee" }, statClass);
         if (index < 0) return [];
-        return Bases.Where(pair => pair.Value[index].HasValue)
+        var ordinary = Bases.Where(pair => pair.Value[index].HasValue)
             .Where(pair => positive ? pair.Key != "chance_to_gain_combo_count" : pair.Key is not ("cold_damage" or "electric_damage" or "heat_damage" or "toxin_damage" or "punch_through" or "chance_to_gain_extra_combo_count"))
-            .Select(pair => pair.Key).OrderBy(DisplayName, StringComparer.OrdinalIgnoreCase).ToArray();
+            .Select(pair => pair.Key);
+        return ordinary.Concat(positive ? CombinedStats : []).OrderBy(DisplayName, StringComparer.OrdinalIgnoreCase).ToArray();
     }
     public static string Signature(IEnumerable<string> positives, string? negative) =>
         string.Join('|', positives.Select(NormalizeStat).Distinct().Order(StringComparer.Ordinal)) + "/" +
@@ -159,6 +197,16 @@ public static class RivenPricing
         var low = Math.Max(1, middle / 3); var high = Math.Max(middle * 3, middle + 25);
         return values.Where(value => value >= low && value <= high).ToArray();
     }
+    private static double WeightedQuantile(IEnumerable<(double Value, double Weight)> source, double quantile)
+    {
+        var rows = source.Where(row => double.IsFinite(row.Value) && double.IsFinite(row.Weight) && row.Value > 0 && row.Weight > 0)
+            .OrderBy(row => row.Value).ToArray();
+        if (rows.Length == 0) return 0;
+        var target = rows.Sum(row => row.Weight) * Math.Clamp(quantile, 0, 1);
+        var running = 0d;
+        foreach (var row in rows) { running += row.Weight; if (running >= target) return row.Value; }
+        return rows[^1].Value;
+    }
     public static RollRule LearnMarketRule(IEnumerable<JsonElement> auctions, string statClass, double disposition = 1)
     {
         var rows = auctions.Select(a => (Price: AuctionPrice(a), Attrs: Attributes(a).ToArray())).Where(x => x.Price.HasValue && x.Attrs.Count(a => a.Positive) >= 2).ToArray();
@@ -167,10 +215,14 @@ public static class RivenPricing
         double Prior(string stat) => statClass == "melee" ? stat switch
         {
             "critical_damage" => 3.2, "critical_chance" => criticalChancePrior, "range" => 2.5, "fire_rate_/_attack_speed" => 2.2,
+            "weak_point_damage" => 2.4, "status_damage" => 2.2,
+            "viral_damage" or "corrosive_damage" or "blast_damage" or "gas_damage" or "magnetic_damage" or "radiation_damage" => 1.9,
             "base_damage_/_melee_damage" => 1.8, "toxin_damage" => 1.5, "combo_duration" => 1.2, "status_chance" => 1.0, _ => .2
         } : stat switch
         {
             "multishot" => 3.3, "critical_damage" => 3.0, "critical_chance" => criticalChancePrior, "base_damage_/_melee_damage" => 2.0,
+            "weak_point_damage" => 3.0, "status_damage" => 2.5,
+            "viral_damage" or "corrosive_damage" or "blast_damage" or "gas_damage" or "magnetic_damage" or "radiation_damage" => 2.1,
             "fire_rate_/_attack_speed" => 1.5, "toxin_damage" => 1.4, "status_chance" => 1.1, "reload_speed" => .8,
             "cold_damage" or "heat_damage" or "electric_damage" => .7, "projectile_speed" or "punch_through" => .5, _ => .1
         };
@@ -257,11 +309,29 @@ public static class RivenPricing
             _ => -8
         } : null;
         var weeklyAnchor = weekly is { Median: > 0 } ? weekly.Median : (double?)null;
-        var anchors = new List<(double Value, double Weight)>();
-        if (median.HasValue) anchors.Add((median.Value * (1 + (listingAgeAdjustment ?? 0) / 100), .40));
-        if (weeklyAnchor.HasValue) anchors.Add((weeklyAnchor.Value, weekly?.SourceAsOf is { } asOf && DateTimeOffset.UtcNow - asOf > TimeSpan.FromDays(90) ? .05 : .25));
-        if (confirmedMedian.HasValue) anchors.Add((confirmedMedian.Value * (1 + (saleVelocityAdjustment ?? 0) / 100), .60));
-        var estimate = anchors.Count == 0 ? 0 : anchors.Sum(x => x.Value * x.Weight) / anchors.Sum(x => x.Weight);
+        double AskWeight((int? Price, HashSet<string> Pos, string? Neg, double Similarity, string Status, DateTimeOffset? Created) row)
+        {
+            var availability = row.Status is "online" or "ingame" ? 1.35 : .72;
+            var ageDays = row.Created.HasValue ? Math.Max(0, (DateTimeOffset.UtcNow - row.Created.Value).TotalDays) : 30;
+            var freshness = ageDays <= 7 ? 1.15 : ageDays <= 30 ? 1 : ageDays <= 90 ? .78 : .52;
+            return Math.Pow(Math.Clamp(row.Similarity, .35, 1.2), 3) * availability * freshness;
+        }
+        var weightedAsks = retainedEvidence.Select(row => ((double)row.Price!.Value, AskWeight(row))).ToArray();
+        var ageFactor = 1 + (listingAgeAdjustment ?? 0) / 100;
+        var quickAsk = WeightedQuantile(weightedAsks, .18) * ageFactor;
+        var fairAsk = WeightedQuantile(weightedAsks, .35) * ageFactor;
+        var patientAsk = WeightedQuantile(weightedAsks, .65) * ageFactor;
+        double EvidenceEstimate(double ask, double confirmedFactor)
+        {
+            var anchors = new List<(double Value, double Weight)>();
+            if (ask > 0) anchors.Add((ask, .45));
+            if (weeklyAnchor.HasValue) anchors.Add((weeklyAnchor.Value, weekly?.SourceAsOf is { } asOf && DateTimeOffset.UtcNow - asOf > TimeSpan.FromDays(90) ? .05 : .12));
+            if (confirmedMedian.HasValue) anchors.Add((confirmedMedian.Value * (1 + (saleVelocityAdjustment ?? 0) / 100) * confirmedFactor, .85));
+            return anchors.Count == 0 ? 0 : anchors.Sum(x => x.Value * x.Weight) / anchors.Sum(x => x.Weight);
+        }
+        var quickEstimate = EvidenceEstimate(quickAsk, .92);
+        var estimate = EvidenceEstimate(fairAsk, 1);
+        var patientEstimate = EvidenceEstimate(patientAsk, 1.08);
         double? quality = null;
         var grades = new List<RivenStatGrade>();
         if (positiveValues is not null && positiveValues.Any(v => v.HasValue))
@@ -273,9 +343,10 @@ public static class RivenPricing
                 var scores = supplied.Select(x =>
                 {
                     var range = requestedRanges.First(r => r.Slug == x.Slug && r.Positive == x.Positive);
+                    if (!range.GradingAvailable) return (double?)null;
                     grades.Add(Grade(range, x.Value!.Value));
                     return QualityScore(range, x.Value.Value);
-                }).ToArray();
+                }).Where(score => score.HasValue).Select(score => score!.Value).ToArray();
                 if (scores.Length > 0) quality = Math.Round(Median(scores) * 100, 1);
             }
             catch (ArgumentException) { quality = null; }
@@ -288,12 +359,16 @@ public static class RivenPricing
             var floorSample = allPrices.Take(Math.Max(1, (int)Math.Ceiling(allPrices.Length * .20))).Select(value => (double)value);
             var trashAnchor = Median(floorSample);
             var usefulness = assessment.Preferred ? 1d : assessment.Desired switch { 0 => .12, 1 => .30, 2 => .58, _ => .78 };
-            estimate = trashAnchor + Math.Max(0, estimate - trashAnchor) * usefulness;
+            double Adjust(double value) => value <= 0 ? 0 : trashAnchor + Math.Max(0, value - trashAnchor) * usefulness;
+            quickEstimate = Adjust(quickEstimate); estimate = Adjust(estimate); patientEstimate = Adjust(patientEstimate);
         }
-        var recommendation = estimate <= 0 ? 0 : Math.Max(1, (int)Math.Round(estimate * .95 * qualityFactor / 5) * 5);
-        var quick = recommendation <= 0 ? 0 : Math.Max(1, (int)Math.Round(recommendation * .88 / 5) * 5);
-        var patient = recommendation <= 0 ? 0 : Math.Max(1, (int)Math.Round(recommendation * 1.15 / 5) * 5);
-        var confidence = exact.Length >= 8 ? "high" : exact.Length >= 3 || similar.Length >= 8 ? "medium" : prices.Length > 0 || weekly is not null ? "low" : "insufficient";
+        int Price(double value) => value <= 0 ? 0 : Math.Max(1, (int)Math.Round(value * qualityFactor / 5) * 5);
+        var recommendation = Price(estimate);
+        var quick = Price(quickEstimate > 0 ? quickEstimate : estimate * .88);
+        var patient = Price(patientEstimate > 0 ? patientEstimate : estimate * 1.15);
+        if (recommendation > 5) quick = Math.Min(quick, recommendation - 5);
+        if (recommendation > 0) patient = Math.Max(patient, recommendation + 5);
+        var confidence = confirmed.Length >= 3 || exact.Length >= 8 ? "high" : confirmed.Length > 0 || exact.Length >= 3 || similar.Length >= 8 ? "medium" : prices.Length > 0 || weekly is not null ? "low" : "insufficient";
         var bands = prices.GroupBy(p => p < 100 ? "under 100p" : p < 250 ? "100–249p" : p < 500 ? "250–499p" : p < 1000 ? "500–999p" : "1000p+")
             .ToDictionary(g => g.Key, g => g.Count());
         var closures = observedClosures.Where(x => x.Signature == signature).Select(x => x.LifetimeHours).Where(x => x >= 0).ToArray();
@@ -304,7 +379,7 @@ public static class RivenPricing
             medianAge, closures.Length, closures.Length == 0 ? null : Median(closures), weekly,
             quality, signature, confirmed.Length, confirmedMedian, confirmedMedianLifetime,
             masteryRank, modRank, rerolls, endo,
-            "Exact-roll figures are live asks. Weekly figures are completed family trades without roll details. Observed closures may be sales or withdrawals.",
+            "Fair price uses a similarity-, availability-, and freshness-weighted 35th percentile of current asks; quick/patient use the 18th/65th percentiles. Confirmed matching sales receive the strongest weight. Weekly figures are stale family trades without roll details; observed closures may be sales or withdrawals.",
             guidance, grades, assessment?.Desired, assessment?.Preferred, assessment?.Note ?? "",
             profileSource, rollRule?.PositiveExpression ?? "", rollRule?.HarmlessNegatives ?? [], excludedAskOutliers,
             listingAgeAdjustment, saleVelocityAdjustment);
@@ -387,6 +462,7 @@ public static class RivenPricing
     }
     public static RivenStatGrade Grade(RivenStatRange range, double value)
     {
+        if (!range.GradingAvailable) throw new ArgumentException($"Final grading range for {DisplayName(range.Slug)} has not been published by Digital Extremes.");
         var middle = (Math.Abs(range.Minimum) + Math.Abs(range.Maximum)) / 2;
         var variance = middle <= 0 ? 0 : (Math.Abs(value) / middle - 1) * 100 * (range.Positive ? 1 : -1);
         var grade = variance >= 9.5 ? "S" : variance >= 7.5 ? "A+" : variance >= 5.5 ? "A" : variance >= 3.5 ? "A-" :
@@ -396,6 +472,7 @@ public static class RivenPricing
     }
     private static double QualityScore(RivenStatRange range, double value)
     {
+        if (!range.GradingAvailable) return .5;
         var low = Math.Min(Math.Abs(range.Minimum), Math.Abs(range.Maximum));
         var high = Math.Max(Math.Abs(range.Minimum), Math.Abs(range.Maximum));
         if (high <= low) return .5;
@@ -406,6 +483,7 @@ public static class RivenPricing
     {
         var notes = new List<string>();
         if (positives.Contains("critical_damage")) notes.Add("Critical Damage assumes the weapon's real build already uses a Critical Damage mod");
+        if (positives.Any(CombinedStats.Contains)) notes.Add("Combined-stat usefulness is recognized, but its final percentage is not graded until Digital Extremes publishes the live range");
         if (positives.Contains("critical_chance") && statClass == "shotgun") notes.Add("Shotgun Riven Critical Chance is based on the weaker shotgun scaler and normally cannot replace Critical Deceleration by itself");
         else if (positives.Contains("critical_chance") && disposition < .9) notes.Add("Critical Chance is disposition-sensitive; at this low disposition verify that the Riven can actually replace the build's normal Critical Chance slot");
         if (negative == "finisher_damage" && statClass == "melee") notes.Add("−Finisher is not treated as universally harmless, especially on nikanas, daggers, dual daggers, claws, swords, fists, scythes and Melee Crescendo setups");

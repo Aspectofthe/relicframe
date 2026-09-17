@@ -6,7 +6,7 @@ using System.Collections.Concurrent;
 namespace RelicFrame.Core;
 
 public sealed record RivenIndex(DateTimeOffset CompletedAt, int ScannedFamilies, int FailedSearches, RivenDeal[] Deals,
-    int ModelVersion = 7, RivenEndoDeal[]? EndoDeals = null, int CuratedProfiles = 0, int FallbackProfiles = 0,
+    int ModelVersion = 8, RivenEndoDeal[]? EndoDeals = null, int CuratedProfiles = 0, int FallbackProfiles = 0,
     RivenDesiredRollSummary[]? DesiredRolls = null);
 public sealed record RivenDesiredRollSummary(string WeaponName, string WeaponSlug, string StatClass, double Disposition,
     string PositiveExpression, string[] HarmlessNegatives, string ProfileSource, string ProfileNotes,
@@ -98,6 +98,7 @@ public sealed class RivenMarket : IAsyncDisposable
     private JsonElement[] weekly = [];
     private JsonElement[] weapons = [];
     private JsonElement[] variants = [];
+    private string[] marketplaceAttributes = [];
     public RivenIndex Index => Volatile.Read(ref index);
     public string Status => Volatile.Read(ref status);
     public TimeSpan? EstimatedRemaining
@@ -141,7 +142,7 @@ public sealed class RivenMarket : IAsyncDisposable
             try
             {
                 var saved = Json.Read<RivenIndex>(path);
-                if (saved.ModelVersion == 7) { index = saved; status = "Stopped; saved index available (check age)"; }
+                if (saved.ModelVersion == 8) { index = saved; status = "Stopped; saved index available (check age)"; }
                 else status = "Saved flips use the retired rule model; rebuilding automatically";
             }
             catch (JsonException) { status = "Saved index unreadable; start a fresh scan"; }
@@ -206,17 +207,20 @@ public sealed class RivenMarket : IAsyncDisposable
     private async Task ScanAsync(CancellationToken ct)
     {
         lock (progressGate) progressDeadline = DateTimeOffset.UtcNow.AddMinutes(7);
-        SetProgress("reference feeds", 0, 2);
+        SetProgress("reference feeds", 0, 3);
         status = "Fetching legacy DE trade archive and current weapon catalog";
         using var weeklyDoc = await http.GetJsonAsync("https://www-static.warframe.com/repos/weeklyRivensPC.json", ct, allowObjectLiteral: true, lowPriority: true);
-        SetProgress("reference feeds", 1, 2);
+        SetProgress("reference feeds", 1, 3);
         if (weeklyDoc.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Weekly feed was not an array.");
         using var weaponsDoc = await http.GetJsonAsync("https://api.warframe.market/v2/riven/weapons", ct, lowPriority: true);
-        SetProgress("reference feeds", 2, 2);
+        SetProgress("reference feeds", 2, 3);
+        var nextMarketplaceAttributes = await FetchMarketplaceAttributesAsync(ct, lowPriority: true);
+        SetProgress("reference feeds", 3, 3);
         var catalog = weaponsDoc.RootElement.Get("data").Rows().ToArray();
         if (catalog.Length == 0) throw new InvalidDataException("Empty weapon catalog.");
         weekly = weeklyDoc.RootElement.Rows().Select(r => r.Clone()).ToArray();
         weapons = catalog.Select(r => r.Clone()).ToArray();
+        marketplaceAttributes = nextMarketplaceAttributes;
         PublishWeaponNames(catalog);
         Directory.CreateDirectory(runtime);
         var envelope = new { fetched_at = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), platform = "pc", rows = weekly };
@@ -227,7 +231,8 @@ public sealed class RivenMarket : IAsyncDisposable
         var newBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, Json.Options).Length;
         if (historyBytes - (File.Exists(snapshot) ? new FileInfo(snapshot).Length : 0) + newBytes <= 32 * 1024 * 1024) Json.WriteAtomic(snapshot, envelope);
         using var pool = new AuctionPool(runtime);
-        var searches = RivenPricing.Bases.Keys.Where(s => s != "chance_to_gain_combo_count").Order(StringComparer.Ordinal)
+        var searches = RivenPricing.Bases.Keys.Concat(marketplaceAttributes.Where(RivenPricing.CombinedStats.Contains))
+            .Distinct(StringComparer.Ordinal).Where(s => s != "chance_to_gain_combo_count").Order(StringComparer.Ordinal)
             .SelectMany(s => new[] { (Stat: s, Sort: "price_asc"), (Stat: s, Sort: "price_desc") }).ToArray();
         var failures = 0;
         // Sequential downloads share the application's 5/sec budget with relic prices; no request storm.
@@ -294,7 +299,7 @@ public sealed class RivenMarket : IAsyncDisposable
         }
         await PersistObservationsAsync(ct, force: true);
         var result = new RivenIndex(DateTimeOffset.UtcNow, scanned, failures,
-            RivenPricing.Sort(deals).ThenByDescending(d => d.ComparableCount).ToArray(), 7,
+            RivenPricing.Sort(deals).ThenByDescending(d => d.ComparableCount).ToArray(), 8,
             endoDeals.DistinctBy(d => d.AuctionId).OrderBy(d => d.PlatPerThousandEndo).ThenByDescending(d => d.Endo).Take(1000).ToArray(),
             curatedProfiles, fallbackProfiles, desiredRolls.OrderBy(row => row.WeaponName, StringComparer.OrdinalIgnoreCase).ToArray());
         Json.WriteAtomic(Path.Combine(runtime, "flip_index.json"), result); Volatile.Write(ref index, result);
@@ -317,14 +322,36 @@ public sealed class RivenMarket : IAsyncDisposable
             if (weekly.Length > 0 && weapons.Length > 0) return;
             using var weeklyDoc = await http.GetJsonAsync("https://www-static.warframe.com/repos/weeklyRivensPC.json", ct, allowObjectLiteral: true);
             using var weaponsDoc = await http.GetJsonAsync("https://api.warframe.market/v2/riven/weapons", ct);
+            var nextMarketplaceAttributes = await FetchMarketplaceAttributesAsync(ct, lowPriority: false);
             var nextWeekly = weeklyDoc.RootElement.Rows().Select(r => r.Clone()).ToArray();
             var nextWeapons = weaponsDoc.RootElement.Get("data").Rows().Select(r => r.Clone()).ToArray();
             if (nextWeekly.Length == 0 || nextWeapons.Length == 0) throw new InvalidDataException("Riven reference feeds were empty.");
             Volatile.Write(ref weekly, nextWeekly); Volatile.Write(ref weapons, nextWeapons);
+            Volatile.Write(ref marketplaceAttributes, nextMarketplaceAttributes);
             PublishWeaponNames(nextWeapons);
         }
         finally { references.Release(); }
     }
+    private async Task<string[]> FetchMarketplaceAttributesAsync(CancellationToken ct, bool lowPriority)
+    {
+        try
+        {
+            using var document = await http.GetJsonAsync("https://api.warframe.market/v2/riven/attributes", ct, lowPriority: lowPriority);
+            return ReadMarketplaceAttributes(document.RootElement);
+        }
+        catch (Exception error) when (!ct.IsCancellationRequested && error is HttpRequestException or JsonException or TaskCanceledException)
+        {
+            Console.WriteLine($"[riven-attributes] {error.GetType().Name}: keeping the previous attribute catalog");
+            return Volatile.Read(ref marketplaceAttributes);
+        }
+    }
+    private static string[] ReadMarketplaceAttributes(JsonElement root) => root.Get("data").Rows()
+        .Select(row => row.Get("slug").Text(row.Get("urlName").Text(row.Get("url_name").Text())))
+        .Where(value => value.Length > 0).Select(value =>
+        {
+            try { return RivenPricing.NormalizeStat(value); }
+            catch (ArgumentException) { return ""; }
+        }).Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
     private void PublishWeaponNames(IEnumerable<JsonElement> catalog)
     {
         var marketNames = catalog.Select(row => row.Get("i18n").Get("en").Get("name").Text()).Where(name => name.Length > 0);

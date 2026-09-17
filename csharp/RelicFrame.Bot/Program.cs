@@ -229,7 +229,7 @@ socket.AutocompleteExecuted += async interaction =>
             "positive_1" or "positive_2" or "positive_3" or "negative" when statClass is not null =>
                 RivenPricing.AllowedStats(statClass, isPositive).Select(RivenPricing.DisplayName),
             "positive_1" or "positive_2" or "positive_3" or "negative" =>
-                RivenPricing.Bases.Keys.Select(RivenPricing.DisplayName).Distinct(StringComparer.OrdinalIgnoreCase),
+                RivenPricing.AllStats.Select(RivenPricing.DisplayName).Distinct(StringComparer.OrdinalIgnoreCase),
             _ => []
         };
         if (current.Name is "positive_1" or "positive_2" or "positive_3" or "negative")

@@ -13,6 +13,8 @@ public static partial class RivenOcrText
     private sealed record ResolvedCandidate(string Slug, double Value, bool Negative, double Score, int Support, double Position);
     [GeneratedRegex(@"(?<multiplier>[xX×])?\s*(?<sign>[+\-−–—])?\s*(?<number>[0-9Oo]{1,4}(?:[.,][0-9Oo]{1,3})?)\s*%?[^A-Za-z\r\n]{0,6}(?<name>[A-Za-z][A-Za-z /&().'-]{2,})", RegexOptions.IgnoreCase)]
     private static partial Regex ValueFirst();
+    [GeneratedRegex(@"(?<multiplier>[xX×])?\s*(?<sign>[+\-−–—])?\s*(?<number>[0-9Oo]{1,4}(?:[.,][0-9Oo]{1,3})?)\s*%?", RegexOptions.IgnoreCase)]
+    private static partial Regex ValueToken();
     [GeneratedRegex(@"(?<sign>[+\-−–—])\s*(?<number>[0-9Oo]{1,4}(?:[.,][0-9Oo]{1,3})?)")]
     private static partial Regex SignedNumber();
     [GeneratedRegex(@"\bMR\s*[:.]?\s*(?<value>\d{1,2})\b", RegexOptions.IgnoreCase)]
@@ -62,13 +64,24 @@ public static partial class RivenOcrText
         var normalizedMultipliers = false;
         foreach (var line in lines)
         {
-            var match = ValueFirst().Match(NormalizeSigns(line.Text)); if (!match.Success) continue;
+            var normalizedLine = NormalizeSigns(line.Text);
+            if (Regex.IsMatch(normalizedLine, @"\b(?:MR|rank|rerolls?|rolls?)\b", RegexOptions.IgnoreCase)) continue;
+            var structured = ValueFirst().Match(normalizedLine);
+            var match = structured.Success ? structured : ValueToken().Match(normalizedLine); if (!match.Success) continue;
             var numberText = match.Groups["number"].Value.Replace('O', '0').Replace('o', '0').Replace(',', '.');
             if (!double.TryParse(numberText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)) continue;
             var multiplier = match.Groups["multiplier"].Success;
             if (multiplier) { value = (value - 1) * 100; normalizedMultipliers = true; }
-            var rawName = match.Groups["name"].Value.Trim(' ', '.', ':', '-');
-            var best = RivenPricing.Bases.Keys.Select(slug => (Slug: slug, Name: RivenPricing.DisplayName(slug), Score: OcrNames(slug).Max(name => Similarity(Key(rawName), Key(name)))))
+            // Damage/status icons are pictures rather than characters. Depending on scale,
+            // Tesseract may emit punctuation, a random letter, or nothing for them. Match
+            // the known label anywhere after the value instead of requiring a clean gap.
+            var rawName = structured.Success ? structured.Groups["name"].Value.Trim(' ', '.', ':', '-')
+                : normalizedLine[(match.Index + match.Length)..].Trim(' ', '.', ':', '-');
+            var tokenOnly = ValueToken().Match(normalizedLine);
+            var fullTail = tokenOnly.Success ? normalizedLine[(tokenOnly.Index + tokenOnly.Length)..].Trim(' ', '.', ':', '-') : rawName;
+            var best = RivenPricing.AllowedStats("rifle", true).Concat(RivenPricing.AllowedStats("melee", true))
+                .Concat(RivenPricing.AllowedStats("rifle", false)).Concat(RivenPricing.AllowedStats("melee", false))
+                .Distinct(StringComparer.Ordinal).Select(slug => (Slug: slug, Name: RivenPricing.DisplayName(slug), Score: Math.Max(StatLabelScore(rawName, slug), StatLabelScore(fullTail, slug))))
                 .OrderByDescending(stat => stat.Score).First();
             if (best.Score < .48 || !PlausibleValue(best.Slug, value)) continue;
             var sign = match.Groups["sign"].Value;
@@ -197,7 +210,9 @@ public static partial class RivenOcrText
     private static bool PlausibleValue(string slug, double value)
     {
         if (!double.IsFinite(value)) return false;
-        var bases = RivenPricing.Bases[slug].OfType<double>().ToArray();
+        if (RivenPricing.CombinedStats.Contains(slug)) return Math.Abs(value) is >= .5 and <= 1000;
+        if (!RivenPricing.Bases.TryGetValue(slug, out var columns)) return false;
+        var bases = columns.OfType<double>().ToArray();
         if (bases.Length == 0) return false;
         var magnitude = Math.Abs(value);
         // Covers mod ranks 0–8, disposition 0.5–1.55, legal stat-count multipliers,
@@ -211,9 +226,9 @@ public static partial class RivenOcrText
         var (positiveMultiplier, negativeMultiplier) = positiveCount == 3 ? (.9375, .75) : (1.2375, .495);
         for (var column = 0; column < 5; column++)
         {
-            if (RivenPricing.Bases[candidate.Slug][column] is not double negativeBase
-                || positives.Any(item => RivenPricing.Bases[item.Slug][column] is null)) continue;
-            var normalized = positives.Select(item => Math.Abs(item.Value) / (RivenPricing.Bases[item.Slug][column]!.Value * positiveMultiplier)).Order().ToArray();
+            if (Basis(candidate.Slug, column) is not double negativeBase
+                || positives.Any(item => Basis(item.Slug, column) is null)) continue;
+            var normalized = positives.Select(item => Math.Abs(item.Value) / (Basis(item.Slug, column)!.Value * positiveMultiplier)).Order().ToArray();
             var center = normalized[normalized.Length / 2];
             var negativeScale = Math.Abs(candidate.Value) / (negativeBase * negativeMultiplier);
             var ratio = negativeScale / Math.Max(.001, center);
@@ -249,11 +264,11 @@ public static partial class RivenOcrText
     }
     private static double PositiveScaleError(ResolvedCandidate candidate, IReadOnlyList<ResolvedCandidate> peers)
     {
-        return Enumerable.Range(0, 5).Where(column => RivenPricing.Bases[candidate.Slug][column].HasValue
-                && peers.All(item => RivenPricing.Bases[item.Slug][column].HasValue))
+        return Enumerable.Range(0, 5).Where(column => Basis(candidate.Slug, column).HasValue
+                && peers.All(item => Basis(item.Slug, column).HasValue))
             .Select(column =>
             {
-                var scales = peers.Append(candidate).Select(item => Math.Abs(item.Value) / RivenPricing.Bases[item.Slug][column]!.Value).ToArray();
+                var scales = peers.Append(candidate).Select(item => Math.Abs(item.Value) / Basis(item.Slug, column)!.Value).ToArray();
                 var mean = scales.Average();
                 return Math.Sqrt(scales.Average(value => Math.Pow(value - mean, 2))) / Math.Max(.001, mean);
             }).DefaultIfEmpty(10).Min();
@@ -305,11 +320,11 @@ public static partial class RivenOcrText
         // All four attributes share one disposition. Try every legal weapon class and choose the
         // negative assignment whose normalized values agree most closely; line order breaks ties.
         return candidates.Select(candidate => (Candidate: candidate, Error: Enumerable.Range(0, 5)
-            .Where(column => candidates.All(item => RivenPricing.Bases[item.Slug][column].HasValue))
+            .Where(column => candidates.All(item => Basis(item.Slug, column).HasValue))
             .Select(column =>
             {
                 var estimates = candidates.Select(item => Math.Abs(item.Value) /
-                    (RivenPricing.Bases[item.Slug][column]!.Value * (item.Slug == candidate.Slug ? .75 : .9375))).ToArray();
+                    (Basis(item.Slug, column)!.Value * (item.Slug == candidate.Slug ? .75 : .9375))).ToArray();
                 var mean = estimates.Average();
                 var spread = Math.Sqrt(estimates.Average(value => Math.Pow(value - mean, 2))) / Math.Max(.1, mean);
                 var rangePenalty = estimates.Sum(value => value is < .45 or > 1.65 ? .35 : 0);
@@ -321,6 +336,13 @@ public static partial class RivenOcrText
     {
         "base_damage_/_melee_damage" => ["damage", "base damage", "melee damage"],
         "fire_rate_/_attack_speed" => ["fire rate", "attack speed"],
+        "cold_damage" => ["cold", "cold damage"],
+        "electric_damage" => ["electricity", "electric damage", "electricity damage"],
+        "heat_damage" => ["heat", "heat damage"],
+        "toxin_damage" => ["toxin", "toxin damage"],
+        "impact_damage" => ["impact", "impact damage"],
+        "puncture_damage" => ["puncture", "puncture damage"],
+        "slash_damage" => ["slash", "slash damage"],
         "damage_vs_corpus" => ["damage to corpus", "damage vs corpus"],
         "damage_vs_grineer" => ["damage to grineer", "damage vs grineer"],
         "damage_vs_infested" => ["damage to infested", "damage vs infested"],
@@ -329,6 +351,20 @@ public static partial class RivenOcrText
         "chance_to_gain_combo_count" => ["chance to gain combo count"],
         _ => [RivenPricing.DisplayName(slug)]
     };
+    private static double? Basis(string slug, int column) =>
+        RivenPricing.Bases.TryGetValue(slug, out var values) && column >= 0 && column < values.Length ? values[column] : null;
+    private static double StatLabelScore(string raw, string slug)
+    {
+        var rawKey = Key(raw);
+        return OcrNames(slug).Select(name => Key(name)).Where(name => name.Length > 0).Select(name =>
+        {
+            if (rawKey == name) return 1.2;
+            if (rawKey.EndsWith(name, StringComparison.Ordinal)) return 1.12;
+            if (rawKey.Contains(name, StringComparison.Ordinal)) return 1.05;
+            var suffix = rawKey.Length > name.Length + 4 ? rawKey[^Math.Min(rawKey.Length, name.Length + 4)..] : rawKey;
+            return Similarity(suffix, name);
+        }).DefaultIfEmpty(0).Max();
+    }
     private static string Clean(string value) => Regex.Replace(value, @"\s+", " ").Trim();
     private static string Key(string value) => new(value.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
     private static string Words(string value) => Regex.Replace(value.ToLowerInvariant(), @"[^a-z0-9]+", " ").Trim();

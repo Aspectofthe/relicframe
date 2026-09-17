@@ -206,11 +206,15 @@ foreach (var statClass in new[] { "rifle", "shotgun", "pistol", "archgun", "mele
 {
     var legalPositives = RivenPricing.AllowedStats(statClass, true);
     var legalNegatives = RivenPricing.AllowedStats(statClass, false);
-    Assert(legalPositives.Length is > 0 and <= 25 && legalNegatives.Length is > 0 and <= 24, $"{statClass} stat filters fit Discord selector limits");
+    Assert(legalPositives.Length is > 0 and <= 40 && legalNegatives.Length is > 0 and <= 24, $"{statClass} stat catalog remains bounded and autocomplete pages it to Discord's limit");
     var fallbackRule = RivenPricing.LearnMarketRule([], statClass);
     Assert(fallbackRule.Alternatives.SelectMany(alternative => alternative.Mandatory.SelectMany(group => group).Concat(alternative.Pool)).All(legalPositives.Contains) &&
         fallbackRule.HarmlessNegatives.All(legalNegatives.Contains), $"{statClass} fallback profile cannot introduce an illegal class stat");
 }
+Assert(RivenPricing.AllowedStats("rifle", true).Contains("viral_damage")
+    && RivenPricing.NormalizeStat("Weakspot Damage") == "weak_point_damage"
+    && !RivenPricing.Ranges(["viral_damage", "status_damage"], null, "rifle", 1)[0].GradingAvailable,
+    "upcoming combined Riven attributes are accepted without inventing unpublished grading ranges");
 try
 {
     RivenPricing.Appraise([], "Test Rifle", "test", ["range", "critical chance"], null, null, []);
@@ -280,6 +284,15 @@ using (var appraisalDoc = JsonDocument.Parse("""
     var robust = RivenPricing.Appraise(outlierDoc.RootElement.Rows(), "Test", "test", ["critical_chance", "critical_damage"], null, null, []);
     Assert(robust.ExcludedAskOutliers == 1 && robust.MedianAsk == 100 && robust.RecommendedPrice < 500,
         "Riven appraisal excludes a lone extreme ask instead of presenting it as price evidence");
+    var liquidJson = JsonSerializer.Serialize(new[] { (100, "online"), (110, "ingame"), (400, "offline"), (450, "offline") }.Select((row, i) => new
+    {
+        id = $"liquid-{i}", buyout_price = row.Item1, created = DateTimeOffset.UtcNow.AddDays(i < 2 ? -2 : -60), owner = new { status = row.Item2 },
+        item = new { attributes = new[] { new { url_name = "critical_chance", positive = true }, new { url_name = "critical_damage", positive = true } } }
+    }));
+    using var liquidDoc = JsonDocument.Parse(liquidJson);
+    var liquid = RivenPricing.Appraise(liquidDoc.RootElement.Rows(), "Test", "test", ["critical_chance", "critical_damage"], null, null, []);
+    Assert(liquid.MedianAsk > 200 && liquid.RecommendedPrice < 200,
+        "Riven fair value favors fresh actionable sellers instead of the midpoint of stale offline asks");
     try { RivenPricing.Appraise([], "Test", "test", ["critical_chance", "critical_damage"], null, null, [], positiveValues: [double.NaN, 100]); throw new Exception("NaN Riven value accepted"); }
     catch (ArgumentException) { }
     try { RivenPricing.Appraise([], "Test", "test", ["critical_chance", "critical_damage"], "critical_chance", null, []); throw new Exception("same positive and negative Riven attribute accepted"); }
@@ -407,7 +420,7 @@ try
         await service.StartAsync(default);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         while (service.Index.CompletedAt == default) await Task.Delay(10, deadline.Token);
-        Assert(service.Index.ModelVersion == 7 && service.Index.ScannedFamilies == 2 && service.Index.Deals.Length > 0, "Riven scan rebuilds and visits every catalog family with the current pricing model");
+        Assert(service.Index.ModelVersion == 8 && service.Index.ScannedFamilies == 2 && service.Index.Deals.Length > 0, "Riven scan rebuilds and visits every catalog family with the current pricing model");
         Assert(service.Index.DesiredRolls is { Length: 2 } && service.Index.DesiredRolls.Single(row => row.WeaponName == "Test").DesiredAsks.Total == 6,
             "all-family scan publishes desired-roll profiles with filtered current asking-price bands");
         Assert(service.Index.CuratedProfiles == 1 && service.Index.FallbackProfiles == 1 && service.Index.Deals.All(d => d.CuratedProfile == "CC CD MS"),
@@ -416,7 +429,7 @@ try
         Assert(service.TryGetStatClass("Test") == "rifle" && service.TryGetStatClass("not-a-weapon") is null,
             "slash-command stat autocomplete can restrict choices to the selected weapon class without network work");
         Assert(service.Index.EndoDeals is { Length: > 0 } && service.Index.EndoDeals.All(d => d.Endo > 0 && d.PlatPerThousandEndo > 0), "Riven scan indexes independent Endo-buying candidates");
-        Assert(feedHandler.Searches == (RivenPricing.Bases.Count - 1) * 2, "both price directions searched for every positive stat");
+        Assert(feedHandler.Searches == (RivenPricing.Bases.Count - 1 + 2) * 2, "both price directions search ordinary stats plus combined stats announced by the live marketplace catalog");
         Assert(service.Index.Deals.All(d => d.PositiveRolls.Length == 3 && d.NegativeRolls.Length == 1), "full roll values retained in deal index");
         var serviceAppraisal = await service.AppraiseAsync("Test", ["critical_chance", "critical_damage", "multishot"], "zoom");
         var serviceForm = await service.GetAppraisalFormAsync("Test");
@@ -504,6 +517,16 @@ var retryHandler = new RetryHandler();
         "generated Riven affixes recover Electricity and reject an impossible +1 Fire Rate OCR label");
     Assert(arcaOcr.Positives.Single(stat => stat.Name == "electric_damage").Value is > 84.89 and < 84.91 && arcaOcr.Negative?.Name == "status_chance",
         "affix-guided OCR preserves Arca Plasmor values and its explicit negative");
+    var iconNoiseOcr = RivenOcrText.Parse([
+        ("Soma\n+88.4% [snowflake emoji] Cold\n+74.2% <status icon> Status Chance\nMR 12 rerolls 3", .82f)
+    ], ["Soma"]);
+    Assert(iconNoiseOcr.Positives.Select(stat => stat.Name).ToHashSet(StringComparer.Ordinal).SetEquals(["cold_damage", "status_chance"]),
+        "Riven OCR ignores emoji/icon text inserted between percentages and stat labels: " + string.Join(",", iconNoiseOcr.Positives.Select(stat => stat.Name)));
+    var combinedOcr = RivenOcrText.Parse([
+        ("Soma\n+96.5% ☣ Viral Damage\n+71.2% Status Damage\nMR 12 rerolls 3", .84f)
+    ], ["Soma"]);
+    Assert(combinedOcr.Positives.Select(stat => stat.Name).ToHashSet(StringComparer.Ordinal).SetEquals(["viral_damage", "status_damage"]),
+        "Riven OCR accepts upcoming combined elemental and Status Damage labels");
     var comparisonOcr = RivenOcrText.Parse([
         ("Daikyu Acritox\n+16.7 > +150 Toxin\n+23.2 > +209 Critical Chance\nMR 6 rerolls 15", .74f)
     ], ["Daikyu", "Dai-Kyu"]);
@@ -806,6 +829,7 @@ sealed class RivenFeedHandler : HttpMessageHandler
         ct.ThrowIfCancellationRequested(); var uri = request.RequestUri!.ToString(); string json;
         if (uri.Contains("weeklyRivens")) json = "[{compatibility:'Test',rerolled:true,median:500,avg:500,min:10,max:2000,pop:40}]";
         else if (uri.EndsWith("/riven/weapons")) json = "{\"data\":[{\"slug\":\"test\",\"rivenType\":\"rifle\",\"disposition\":1,\"i18n\":{\"en\":{\"name\":\"Test\"}}},{\"slug\":\"empty\",\"i18n\":{\"en\":{\"name\":\"Empty\"}}}]}";
+        else if (uri.EndsWith("/riven/attributes")) json = "{\"data\":[{\"slug\":\"viral_damage\"},{\"slug\":\"status_damage\"}]}";
         else
         {
             if (uri.Contains("weapon_url_name=")) Interlocked.Increment(ref WeaponFetches); else Interlocked.Increment(ref Searches);
