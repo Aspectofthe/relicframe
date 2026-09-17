@@ -5,7 +5,13 @@
   <ItemGroup>
     <ProjectReference Include="../RelicFrame.Core/RelicFrame.Core.csproj" />
     <PackageReference Include="Discord.Net.WebSocket" Version="3.20.1" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.3" />
+    <PackageReference Include="SkiaSharp" Version="4.152.0" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.152.0" />
     <PackageReference Include="TesseractOCR" Version="5.5.2" />
     <PackageReference Include="Tesseract.Data.English" Version="4.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="riven-ocr\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

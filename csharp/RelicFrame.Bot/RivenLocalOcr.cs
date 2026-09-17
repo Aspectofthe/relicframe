@@ -14,6 +14,7 @@ internal sealed class RivenLocalOcr : IDisposable
         PooledConnectionLifetime = TimeSpan.FromMinutes(5)
     }) { Timeout = TimeSpan.FromSeconds(30) };
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly RivenOnnxOcr onnx = new();
     private Engine? engine;
 
     public async Task<RivenOcrDraft> AnalyzeAsync(string imageUrl, string filename, int reportedSize, IReadOnlyList<string> weapons, CancellationToken ct)
@@ -44,7 +45,8 @@ internal sealed class RivenLocalOcr : IDisposable
         {
             engine ??= CreateEngine();
             using var original = PixImage.LoadFromMemory(bytes);
-            if (original.Width < 220 || original.Height < 220) throw new ArgumentException("That image is too small for reliable Riven text recognition. Upload the original screenshot or a clearer crop.");
+            if (Math.Max(original.Width, original.Height) < 220 || Math.Min(original.Width, original.Height) < 80)
+                throw new ArgumentException("That image is too small for reliable Riven text recognition. Upload the original screenshot or a clearer crop.");
             var scale = Math.Clamp(2200f / Math.Max(original.Width, original.Height), 1.25f, 3f);
             using var enlarged = original.Scale(scale, scale);
             using var gray = enlarged.Depth >= 24 ? enlarged.ConvertRGBToGray() : enlarged.Clone();
@@ -54,6 +56,15 @@ internal sealed class RivenLocalOcr : IDisposable
             using var purpleOtsu = purple.BinarizeOtsuAdaptiveThreshold(32, 32, 1, 1, .08f);
             using var sauvola = gray.BinarizeSauvolaTiled(24, .34f, 1, 1);
             var passes = new List<(string Text, float Confidence)>();
+            // WFHelper's local ONNX detector/recognizer isolates stat rows before
+            // whole-card OCR. Tesseract remains an independent fallback and reads
+            // the weapon title/footer that the stat model intentionally ignores.
+            try { foreach (var line in onnx.Recognize(bytes, ct)) passes.Add(line); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                Console.WriteLine($"[riven-ocr] ONNX pass failed ({error.GetType().Name}); using Tesseract fallback");
+            }
             Read(enlarged, PageSegMode.Auto, passes);
             Read(gray, PageSegMode.SingleColumn, passes);
             Read(purple, PageSegMode.SingleColumn, passes);
@@ -124,5 +135,5 @@ internal sealed class RivenLocalOcr : IDisposable
         return result;
     }
 
-    public void Dispose() { engine?.Dispose(); gate.Dispose(); }
+    public void Dispose() { onnx.Dispose(); engine?.Dispose(); gate.Dispose(); }
 }
