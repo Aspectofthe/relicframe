@@ -13,7 +13,6 @@ sys.path.insert(0, str(ROOT / "relicframe"))
 from relic_data import Relic, RelicReward, cheapest_combination_cost
 from order_math import matching_entries
 from riven_roll_rules import parse_rule_expression, parse_negative_expression, evaluate_curated_roll
-from companion_vision import rarity_from_colors
 from dataclasses import asdict
 from riven_market import find_riven_deals, calculate_riven_stat_ranges, auction_roll_quality, parse_weekly, WeeklyPrice, auction_price
 from relic_row import compute_row
@@ -52,9 +51,6 @@ for expr in expressions:
     for _ in range(20):
         pos = rng.sample(stats, rng.choice([2, 3])); neg = rng.choice([[], ["zoom"], ["ammo_maximum"], ["critical_damage"]])
         cases.append({"kind": "rule", "positives": pos, "negatives": neg, "rule": rule, "expected": asdict(evaluate_curated_roll(pos, neg, rule))})
-for _ in range(100):
-    colors = rng.choices(["ash grey", "sargas brown", "alad blue", "mars red", "unknown", "sargas brown (gold)"], k=rng.randrange(0, 5))
-    cases.append({"kind": "colors", "colors": colors, "expected": rarity_from_colors(colors)})
 for i in range(120):
     pos = ["critical_chance", "critical_damage"] + (["multishot"] if i % 2 else [])
     neg = "zoom" if i % 3 else None

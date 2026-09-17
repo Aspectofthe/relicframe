@@ -9,19 +9,20 @@ internal sealed record ChannelState
     public ulong ChannelId { get; set; }
     public ulong MessageId { get; set; }
     public string RenderHash { get; set; } = "";
+    public bool CleanupPending { get; set; }
 }
 internal sealed record WorldGuildState
 {
     public ulong CategoryId { get; set; }
-    public Dictionary<string, ChannelState> Channels { get; init; } = new(StringComparer.Ordinal);
-    public Dictionary<string, ulong> Roles { get; init; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ChannelState> Channels { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ulong> Roles { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, string[]>? Signatures { get; set; }
-    public Dictionary<string, ulong> PingMessages { get; init; } = new(StringComparer.Ordinal);
-    public List<ulong> RoleMenuMessages { get; init; } = [];
+    public Dictionary<string, ulong> PingMessages { get; set; } = new(StringComparer.Ordinal);
+    public List<ulong> RoleMenuMessages { get; set; } = [];
 }
 internal sealed record WorldStore
 {
-    public Dictionary<string, WorldGuildState> Guilds { get; init; } = new(StringComparer.Ordinal);
+    public Dictionary<string, WorldGuildState> Guilds { get; set; } = new(StringComparer.Ordinal);
 }
 
 internal sealed class WorldManager : IAsyncDisposable
@@ -64,7 +65,9 @@ internal sealed class WorldManager : IAsyncDisposable
     private readonly DiscordSocketClient bot;
     private readonly ulong targetGuild;
     private readonly string statePath;
-    private readonly ArbitrationEntry[] schedule;
+    private ArbitrationEntry[] schedule;
+    private readonly ArbitrationEntry[] legacySchedule;
+    private readonly ArbitrationScheduleFeed scheduleFeed;
     private readonly WorldStateClient client;
     private readonly SemaphoreSlim refresh = new(1, 1);
     private readonly SemaphoreSlim setup = new(1, 1);
@@ -78,17 +81,29 @@ internal sealed class WorldManager : IAsyncDisposable
     public WorldManager(DiscordSocketClient bot, ulong targetGuild, string runtime, string schedulePath)
     {
         this.bot = bot; this.targetGuild = targetGuild; statePath = Path.Combine(runtime, "world_state.json");
-        schedule = ArbitrationSchedule.Load(schedulePath, Environment.GetEnvironmentVariable("WORLD_STATE_TIMEZONE") ?? "America/New_York");
+        legacySchedule = ArbitrationSchedule.Load(schedulePath, Environment.GetEnvironmentVariable("WORLD_STATE_TIMEZONE") ?? "America/New_York");
+        scheduleFeed = new(Path.Combine(runtime, "arbitration_schedule.json"));
+        schedule = scheduleFeed.Cached.Length > 0 ? scheduleFeed.Cached : legacySchedule;
         try { store = File.Exists(statePath) ? Json.Read<WorldStore>(statePath) : new(); }
         catch (Exception e) when (e is IOException or System.Text.Json.JsonException) { store = new(); status = "saved state unreadable; setup required"; }
-        client = new(); bot.ButtonExecuted += HandleButtonAsync;
+        client = new(); bot.ButtonExecuted += DispatchButtonAsync;
     }
-    private WorldGuildState State(ulong guild) => store.Guilds.GetValueOrDefault(guild.ToString()) ?? (store.Guilds[guild.ToString()] = new());
+    private WorldGuildState State(ulong guild)
+    {
+        store.Guilds ??= new(StringComparer.Ordinal);
+        var state = store.Guilds.GetValueOrDefault(guild.ToString()) ?? (store.Guilds[guild.ToString()] = new());
+        state.Channels ??= new(StringComparer.Ordinal); state.Roles ??= new(StringComparer.Ordinal);
+        state.PingMessages ??= new(StringComparer.Ordinal); state.RoleMenuMessages ??= [];
+        return state;
+    }
+    private SocketGuildUser? CurrentBotMember(SocketGuild guild) => bot.CurrentUser is { } current ? guild.GetUser(current.Id) : null;
     private void Save() => Json.WriteAtomic(statePath, store);
     public async Task<string> SetupAsync(SocketGuild guild, CancellationToken ct)
     {
         if (guild.Id != targetGuild) return "C# preview setup is restricted to its configured test guild.";
-        if (!guild.CurrentUser.GuildPermissions.ManageChannels || !guild.CurrentUser.GuildPermissions.ManageRoles)
+        var botMember = CurrentBotMember(guild);
+        if (botMember is null) return "Discord is still loading this bot's server membership. Try setup again in a few seconds.";
+        if (!botMember.GuildPermissions.ManageChannels || !botMember.GuildPermissions.ManageRoles)
             return "I need Manage Channels and Manage Roles before I can configure the live-feed category.";
         await setup.WaitAsync(ct);
         try
@@ -103,7 +118,7 @@ internal sealed class WorldManager : IAsyncDisposable
                 ITextChannel? channel = guild.GetTextChannel(saved.ChannelId) ?? guild.TextChannels.FirstOrDefault(c => c.CategoryId == category.Id && (c.Name == definition.Name || c.Name == key));
                 if (channel is null) channel = await guild.CreateTextChannelAsync(definition.Name, p => { p.CategoryId = category.Id; p.Topic = definition.Topic; });
                 else if (channel.Name != definition.Name || channel.Topic != definition.Topic) await channel.ModifyAsync(p => { p.Name = definition.Name; p.Topic = definition.Topic; p.CategoryId = category.Id; });
-                saved.ChannelId = channel.Id;
+                saved.ChannelId = channel.Id; saved.RenderHash = ""; saved.CleanupPending = true;
             }
             foreach (var (key, definition) in Roles)
             {
@@ -113,7 +128,7 @@ internal sealed class WorldManager : IAsyncDisposable
                 else if ((role.Name != definition.Name || !role.IsMentionable) && role is SocketRole socketRole) await socketRole.ModifyAsync(p => { p.Name = definition.Name; p.Mentionable = true; });
                 state.Roles[key] = role.Id;
             }
-            Save(); await UpdateRoleMenusAsync(guild, state); return $"Configured {Channels.Count} live channels and {Roles.Count} opt-in roles in {CategoryName}. Old messages authored by this bot are removed as each managed board refreshes; user messages are preserved.";
+            Save(); await UpdateRoleMenusAsync(guild, state); return $"Configured {Channels.Count} live channels and {Roles.Count} opt-in roles in {CategoryName}. The next board pass replaces the guide and removes older bot-authored messages once; user messages are preserved.";
         }
         finally { setup.Release(); }
     }
@@ -142,13 +157,35 @@ internal sealed class WorldManager : IAsyncDisposable
         await DiscordCleanup.BotMessagesAsync(channel, guild.CurrentUser.Id, state.RoleMenuMessages.ToArray());
         Save();
     }
-    private async Task HandleButtonAsync(SocketMessageComponent interaction)
+    private async Task DispatchButtonAsync(SocketMessageComponent interaction)
     {
         if (interaction.GuildId != targetGuild || !interaction.Data.CustomId.StartsWith("rf-role:", StringComparison.Ordinal)) return;
-        var key = interaction.Data.CustomId[8..]; if (!Roles.ContainsKey(key) || interaction.User is not SocketGuildUser user) { await interaction.RespondAsync("Role unavailable.", ephemeral: true); return; }
+        var key = interaction.Data.CustomId[8..];
+        if (!Roles.ContainsKey(key) || interaction.User is not SocketGuildUser)
+        { await interaction.RespondAsync("Role unavailable.", ephemeral: true); return; }
         var state = State(targetGuild); var guild = bot.GetGuild(targetGuild); var role = guild?.GetRole(state.Roles.GetValueOrDefault(key));
         if (role is null) { await interaction.RespondAsync("That role is missing. Ask a manager to run /rf-world setup.", ephemeral: true); return; }
         await interaction.DeferAsync(ephemeral: true);
+        _ = Task.Run(async () =>
+        {
+            try { await HandleButtonAsync(interaction); }
+            catch (Exception error)
+            {
+                Console.WriteLine($"[world-role] {error.GetType().Name}: {error.Message}");
+                try
+                {
+                    const string message = "Discord could not update that notification role. Check the bot's role position and try again.";
+                    await interaction.FollowupAsync(message, ephemeral: true);
+                }
+                catch (Exception responseError) { Console.WriteLine($"[world-role] Response failed: {responseError.GetType().Name}"); }
+            }
+        }, CancellationToken.None);
+    }
+    private async Task HandleButtonAsync(SocketMessageComponent interaction)
+    {
+        var key = interaction.Data.CustomId[8..]; var user = (SocketGuildUser)interaction.User;
+        var state = State(targetGuild); var guild = bot.GetGuild(targetGuild); var role = guild?.GetRole(state.Roles.GetValueOrDefault(key));
+        if (role is null) throw new InvalidOperationException("Saved notification role is missing.");
         if (user.Roles.Any(r => r.Id == role.Id)) { await user.RemoveRoleAsync(role); await interaction.FollowupAsync($"Removed **{role.Name}**.", ephemeral: true); }
         else { await user.AddRoleAsync(role); await interaction.FollowupAsync($"Added **{role.Name}**.", ephemeral: true); }
     }
@@ -170,8 +207,13 @@ internal sealed class WorldManager : IAsyncDisposable
             {
                 var started = DateTimeOffset.UtcNow;
                 try { await RefreshAsync(ct); }
-                catch (Exception e) when (!ct.IsCancellationRequested && e is HttpRequestException or System.Text.Json.JsonException or IOException or InvalidOperationException or Discord.Net.HttpException or TaskCanceledException)
-                { status = $"refresh failed ({e.GetType().Name}); boards retained"; Console.WriteLine($"[world] {status}"); }
+                catch (Exception e) when (!ct.IsCancellationRequested && e is not OutOfMemoryException)
+                {
+                    status = $"refresh failed ({e.GetType().Name}); boards retained";
+                    Console.WriteLine(e is OperationCanceledException
+                        ? "[world] upstream timed out after two bounded attempts; boards retained; retry in the next cycle"
+                        : $"[world] {e.GetType().Name}: {e.Message}; boards retained");
+                }
                 var wait = TimeSpan.FromSeconds(60) - (DateTimeOffset.UtcNow - started); await Task.Delay(wait > TimeSpan.FromSeconds(5) ? wait : TimeSpan.FromSeconds(5), ct);
             }
         }
@@ -182,17 +224,38 @@ internal sealed class WorldManager : IAsyncDisposable
         await refresh.WaitAsync(ct);
         try
         {
-            status = "fetching"; var data = await client.FetchAsync(ct); var guild = bot.GetGuild(targetGuild) ?? throw new InvalidOperationException("Test guild unavailable.");
+            status = "fetching"; var data = await client.FetchAsync(ct);
+            var published = await scheduleFeed.GetAsync(data.Nodes, ct);
+            if (published.Length > 0) schedule = published;
+            else if (schedule.Length == 0 && legacySchedule.Length > 0) schedule = legacySchedule;
+            var guild = bot.GetGuild(targetGuild) ?? throw new InvalidOperationException("Test guild unavailable.");
+            var botMember = CurrentBotMember(guild) ?? throw new InvalidOperationException("Discord has not loaded this bot's server membership yet.");
             var state = State(targetGuild); if (state.Channels.Count == 0) throw new InvalidOperationException("Run /rf-world setup.");
             var failures = new List<string>();
-            foreach (var key in Channels.Keys.Where(k => k != "world-pings"))
+            var officialOnly = data.Source.Contains("fissures only", StringComparison.OrdinalIgnoreCase);
+            var boardKeys = officialOnly
+                ? new[] { "bot-guide", "world-fissures", "world-steel-fissures", "world-void-storms", "world-arbitration", "world-cascade" }
+                : Channels.Keys.Where(k => k != "world-pings");
+            foreach (var key in boardKeys)
             {
-                try { await UpsertBoardAsync(guild, state, key, WorldRender.Build(key, data, schedule), guild.CurrentUser.Id, state.PingMessages.GetValueOrDefault(key)); }
+                try { await UpsertBoardAsync(guild, state, key, WorldRender.Build(key, data, schedule), botMember.Id, state.PingMessages.GetValueOrDefault(key)); }
                 catch (Exception e) when (e is Discord.Net.HttpException or InvalidOperationException) { failures.Add($"{key}: {e.GetType().Name}"); }
             }
-            try { await SendNewPingsAsync(guild, state, WorldRender.Signatures(data, schedule)); }
+            try
+            {
+                var signatures = WorldRender.Signatures(data, schedule);
+                if (officialOnly) signatures = signatures.Where(pair => pair.Key is "fissures" or "steel_fissures" or "void_storms" or "cascade" or "steel_cascade"
+                        || pair.Key == "arbitration" || pair.Key.StartsWith("arbitration_", StringComparison.Ordinal)
+                        || pair.Key.StartsWith("fissure_", StringComparison.Ordinal) || pair.Key.StartsWith("steel_fissure_", StringComparison.Ordinal) || pair.Key.StartsWith("void_storm_", StringComparison.Ordinal))
+                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                await SendNewPingsAsync(guild, state, signatures);
+            }
             catch (Exception e) when (e is Discord.Net.HttpException or InvalidOperationException) { failures.Add("pings: " + e.GetType().Name); }
-            lastSuccess = DateTimeOffset.UtcNow; status = failures.Count == 0 ? $"ready ({data.Source})" : $"partial: {failures.Count} board/ping failures; {failures[0]}"; Save();
+            lastSuccess = DateTimeOffset.UtcNow;
+            status = failures.Count > 0 ? $"partial: {failures.Count} board/ping failures; {failures[0]}"
+                : officialOnly ? "degraded: official fissures and published Arbitrations current; other translated boards retained"
+                : $"ready ({data.Source})";
+            Save();
         }
         finally { refresh.Release(); }
     }
@@ -201,6 +264,7 @@ internal sealed class WorldManager : IAsyncDisposable
     {
         if (boards.Length == 0) return; var saved = state.Channels[key]; var channel = guild.GetTextChannel(saved.ChannelId) ?? throw new InvalidOperationException("Saved feed channel missing.");
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0', boards.SelectMany(b => new[] { b.Title, b.Description, b.Color.ToString() })))));
+        if (saved.MessageId != 0 && hash == saved.RenderHash && !saved.CleanupPending) return;
         var existing = saved.MessageId == 0 ? null : await channel.GetMessageAsync(saved.MessageId) as IUserMessage;
         if (hash != saved.RenderHash || existing is null)
         {
@@ -209,7 +273,11 @@ internal sealed class WorldManager : IAsyncDisposable
             else await existing.ModifyAsync(p => { p.Embeds = embeds; p.AllowedMentions = AllowedMentions.None; });
             saved.RenderHash = hash;
         }
-        await DiscordCleanup.BotMessagesAsync(channel, botUserId, saved.MessageId, pingMessageId);
+        if (saved.CleanupPending)
+        {
+            await DiscordCleanup.BotMessagesAsync(channel, botUserId, saved.MessageId, pingMessageId);
+            saved.CleanupPending = false;
+        }
     }
     private async Task SendNewPingsAsync(SocketGuild guild, WorldGuildState state, IReadOnlyDictionary<string, string[]> next)
     {
@@ -232,17 +300,24 @@ internal sealed class WorldManager : IAsyncDisposable
             state.PingMessages[channelKey] = message.Id;
         }
     }
-    public static ApplicationCommandProperties BuildCommand()
+    public static ApplicationCommandProperties BuildCommand(string commandName = "rf-world")
     {
-        var group = new SlashCommandBuilder().WithName("rf-world").WithDescription("C# preview: live Warframe boards and roles");
-        foreach (var name in new[] { "setup", "refresh", "start", "stop", "status", "help" }) group.AddOption(new SlashCommandOptionBuilder().WithName(name).WithDescription($"World feeds: {name}").WithType(ApplicationCommandOptionType.SubCommand));
+        var group = new SlashCommandBuilder().WithName(commandName).WithDescription("Live Warframe boards and notification roles");
+        foreach (var name in new[] { "setup", "refresh", "start", "stop", "status", "arbitration", "cascade", "help" }) group.AddOption(new SlashCommandOptionBuilder().WithName(name).WithDescription($"World feeds: {name}").WithType(ApplicationCommandOptionType.SubCommand));
         return group.Build();
     }
     public async Task<string> CommandAsync(SocketSlashCommand command, CancellationToken ct, CancellationToken lifetime)
     {
         var name = command.Data.Options.Single().Name;
-        if (name == "help") return "The C# world preview creates WARFRAME LIVE with bot-guide, role-pings, world-cycles, warframe-news and the remaining channels without the old world- prefix. It refreshes each minute and only pings new signatures. Managed channels keep the current bot board/ping and remove older bot-authored messages without deleting user posts. Manage Server is required for setup/start/stop/manual refresh.";
+        if (name == "help") return "WARFRAME LIVE includes the complete bot guide, role buttons, every current bounty job, cycles, news, alerts, Sortie, Archon, Steel Path, weekly activities, Archimedea, vendors, fissures, storms, invasions, Arbitration and Cascade. World data checks each minute, but unchanged Discord boards are not fetched or edited. Setup replaces old bot guides/boards and performs one cleanup without deleting user posts. Manage Server is required for setup/start/stop/manual refresh.";
         if (name == "status") return $"World feeds: {Status}; last success {(LastSuccess is { } last ? $"<t:{last.ToUnixTimeSeconds()}:R>" : "never")}; schedule entries {schedule.Length}.";
+        if (name is "arbitration" or "cascade")
+        {
+            var data = await client.FetchAsync(ct); var published = await scheduleFeed.GetAsync(data.Nodes, ct);
+            if (published.Length > 0) schedule = published;
+            var key = name == "arbitration" ? "world-arbitration" : "world-cascade";
+            return string.Join("\n\n", WorldRender.Build(key, data, schedule).Select(board => $"**{board.Title}**\n{board.Description}"));
+        }
         if (command.User is not SocketGuildUser user || !user.GuildPermissions.ManageGuild) return "Manage Server permission is required.";
         var guild = bot.GetGuild(targetGuild) ?? throw new InvalidOperationException("Test guild unavailable.");
         if (name == "setup") return await SetupAsync(guild, ct);
@@ -252,6 +327,6 @@ internal sealed class WorldManager : IAsyncDisposable
     }
     public async ValueTask DisposeAsync()
     {
-        bot.ButtonExecuted -= HandleButtonAsync; await StopAsync(); client.Dispose(); cancellation?.Dispose(); refresh.Dispose(); setup.Dispose();
+        bot.ButtonExecuted -= DispatchButtonAsync; await StopAsync(); client.Dispose(); scheduleFeed.Dispose(); cancellation?.Dispose(); refresh.Dispose(); setup.Dispose();
     }
 }

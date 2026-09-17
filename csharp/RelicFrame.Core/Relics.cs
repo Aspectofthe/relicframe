@@ -34,6 +34,15 @@ public sealed record Relic(string RelicName, IReadOnlyList<Reward> Rewards, bool
         "common" => Chances[(int)tier][0], "uncommon" => Chances[(int)tier][1], "rare" => Chances[(int)tier][2], _ => 0
     };
     public static double AtLeastOne(double chancePct, int n) => n <= 0 ? 0 : (1 - Math.Pow(1 - Math.Clamp(chancePct / 100, 0, 1), n)) * 100;
+    public static int RarityDisplayOrder(string rarity) => rarity.Trim().ToLowerInvariant() switch
+    {
+        "rare" => 0, "uncommon" => 1, "common" => 2, _ => 3
+    };
+    public IReadOnlyList<Reward> DisplayRewards(Func<Reward, double?> price) => Rewards
+        .OrderBy(reward => RarityDisplayOrder(reward.Rarity))
+        .ThenByDescending(reward => price(reward) ?? double.NegativeInfinity)
+        .ThenBy(reward => reward.RewardName, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
     private static double Price(IReadOnlyDictionary<string, double?> prices, Reward r) => prices.GetValueOrDefault(r.RewardName.Trim().ToLowerInvariant()) ?? 0;
     public double ExpectedValue(Refinement tier, IReadOnlyDictionary<string, double?> prices) => Rewards.Sum(r => Chance(tier, r.Rarity) / 100 * Price(prices, r));
     public double WorstCaseValue(IReadOnlyDictionary<string, double?> prices) => Rewards.Count == 0 ? 0 : Rewards.Min(r => Price(prices, r));
@@ -42,7 +51,7 @@ public sealed record Relic(string RelicName, IReadOnlyList<Reward> Rewards, bool
     {
         var chance = Chance(tier, r.Rarity);
         return new Odds(r.RewardName, Price(prices, r), r.Rarity, chance, chance > 0 ? 100 / chance : null, AtLeastOne(chance, 10));
-    }).OrderByDescending(r => r.Price).Take(Math.Max(0, n)).ToArray();
+    }).OrderByDescending(r => r.Price).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase).Take(Math.Max(0, n)).ToArray();
     public double ExpectedDucats(Refinement tier, IReadOnlyDictionary<string, int> ducats) => Rewards.Sum(r => Chance(tier, r.Rarity) / 100 * ducats.GetValueOrDefault(r.RewardName.Trim().ToLowerInvariant()));
     public DucatEfficiency DucatEfficiency(Refinement tier, IReadOnlyDictionary<string, int> ducats, double? cost, double traceRate = 0)
     {
@@ -125,7 +134,7 @@ public sealed record Relic(string RelicName, IReadOnlyList<Reward> Rewards, bool
         }
         return rows;
     }
-    public static IReadOnlyDictionary<string, Relic> LoadCsv(string path)
+    public static IReadOnlyDictionary<string, Relic> LoadCsv(string path, bool includeRequiem = true)
     {
         using var reader = new TextFieldParser(path, System.Text.Encoding.UTF8) { HasFieldsEnclosedInQuotes = true, TrimWhiteSpace = false };
         reader.SetDelimiters(",");
@@ -138,6 +147,10 @@ public sealed record Relic(string RelicName, IReadOnlyList<Reward> Rewards, bool
         {
             var row = reader.ReadFields(); if (row is null) continue;
             var name = row[ni].Trim(); var reward = new Reward(row[ri].Trim(), row[qi].Trim().ToLowerInvariant());
+            // Exclude the whole relic, not individual reward slots: otherwise its
+            // expected value and drop probabilities would describe an incomplete pool.
+            if (!includeRequiem && (name.Equals("Requiem", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("Requiem ", StringComparison.OrdinalIgnoreCase))) continue;
             if (!result.TryGetValue(name, out var relic))
             {
                 bool? vault = (vi >= 0 && vi < row.Length ? row[vi].Trim().ToLowerInvariant() : "") switch

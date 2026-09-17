@@ -1,7 +1,7 @@
 {
   "source": "good rolls for selling (1).xlsx",
   "generated_at": 1787669831.994561,
-  "rule_count": 417,
+  "rule_count": 418,
   "requirements": {
     "minimum_desired_positives": 2,
     "harmless_negative_required": true,
@@ -9587,6 +9587,69 @@
       ],
       "source_cells": [
         "melee!A33"
+      ]
+    },
+    {
+      "weapon": "dex nikana",
+      "key": "dexnikana",
+      "positive_expression": "CD AS RANGE or CD/RANGE AS ELEC or CC CD IC/DMG",
+      "negative_expression": "SLIDE/EFF/IMP/PUNC",
+      "harmless_negatives": [
+        "channeling_efficiency",
+        "critical_chance_on_slide_attack",
+        "impact_damage",
+        "puncture_damage"
+      ],
+      "alternatives": [
+        {
+          "mandatory": [
+            [
+              "critical_damage"
+            ],
+            [
+              "fire_rate_/_attack_speed"
+            ],
+            [
+              "range"
+            ]
+          ],
+          "pool": []
+        },
+        {
+          "mandatory": [
+            [
+              "fire_rate_/_attack_speed"
+            ],
+            [
+              "electric_damage"
+            ]
+          ],
+          "pool": [
+            "critical_damage",
+            "range"
+          ]
+        },
+        {
+          "mandatory": [
+            [
+              "critical_chance"
+            ],
+            [
+              "critical_damage"
+            ]
+          ],
+          "pool": [
+            "base_damage_/_melee_damage",
+            "channeling_damage"
+          ]
+        }
+      ],
+      "notes": "Combo selling profile favors Critical Damage, Attack Speed and Range; Electricity supports Melee Influence. Heavy-attack profile requires Critical Chance plus Critical Damage, with Initial Combo or Damage as the third line. Finisher Damage is intentionally not accepted as harmless for nikanas.",
+      "categories": [
+        "melee"
+      ],
+      "source_cells": [
+        "manual-current-catalog!dex-nikana"
       ]
     },
     {

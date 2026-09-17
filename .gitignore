@@ -1,5 +1,4 @@
-# This workspace contains private exports and many historical copies.
-# Track only the application and explicitly approved reference files.
+# Track only application source and explicitly approved reference files.
 /*
 !/.gitignore
 !/.gitattributes
@@ -10,17 +9,25 @@
 !/Untitled.txt
 !/relicframe/
 !/csharp/
+!/csharp/run-bot.sh
+
 /csharp/**/bin/
 /csharp/**/obj/
 /csharp/**/publish/
 /csharp/fixtures.generated.json
 /csharp/runtime/
+/csharp/.audit-bot/
+/csharp/.audit-tests/
+/.dotnet_cli/
+/.nuget/
 
 /relicframe/*
 !/relicframe/*.py
+!/relicframe/*.bat
 !/relicframe/requirements.txt
 !/relicframe/README.md
 !/relicframe/.env.example
+!/relicframe/docs/
 !/relicframe/tests/
 /relicframe/tests/*
 !/relicframe/tests/*.py
@@ -50,5 +57,9 @@
 **/discord_world_state.json
 **/discord_list_state.json
 **/trade_chat_offers.jsonl
+**/seller_blacklist.json
 **/companion_sales/
 **/companion_current_market/
+**/rivens/history/
+**/rivens/latest.json
+**/rivens/flip_index.json

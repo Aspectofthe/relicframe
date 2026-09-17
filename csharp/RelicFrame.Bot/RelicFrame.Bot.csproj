@@ -1,7 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../RelicFrame.Core/RelicFrame.Core.csproj" />
     <PackageReference Include="Discord.Net.WebSocket" Version="3.20.1" />
+    <PackageReference Include="TesseractOCR" Version="5.5.2" />
+    <PackageReference Include="Tesseract.Data.English" Version="4.0.0" />
   </ItemGroup>
 </Project>

@@ -10,6 +10,8 @@ public sealed record RelicRow(Relic Relic, RelicChannel Online, RelicChannel Off
 {
     public IEnumerable<Profit> Profits(string scope) => scope switch
     { "Online only" => [Online.Profit], "Offline only" => [Offline.Profit], _ => [Online.Profit, Offline.Profit] };
+    private IEnumerable<RelicChannel> Channels(string scope) => scope switch
+    { "Online only" => [Online], "Offline only" => [Offline], _ => [Online, Offline] };
     public static RelicRow Compute(Relic relic, Refinement tier, IReadOnlyDictionary<string, double?> prices,
         PriceInfo info, IReadOnlyDictionary<string, int> ducats, double traceRate = 0, string scope = "Online + Offline")
     {
@@ -50,11 +52,21 @@ public sealed record RelicRow(Relic Relic, RelicChannel Online, RelicChannel Off
         {
             "Guaranteed Profit" => [hasPrice, profits.Max(p => p.WorstCaseProfit)],
             "Expected Profit" => [hasPrice, profits.Max(p => p.ExpectedProfit)],
-            "Best ROI" => double.IsNegativeInfinity(roi) ? [0, roi, roi] : [1, roi * (1 - BestRisk / 100d), roi],
+            "Best ROI" => double.IsNegativeInfinity(roi) ? [0, roi, roi] : [1, roi, -BestRisk,
+                known.Length > 0 ? known.Max(p => p.ExpectedProfit) : double.NegativeInfinity],
+            "Lowest Risk" => [hasPrice, -BestRisk, known.Length > 0 ? known.Max(p => p.ExpectedProfit) : double.NegativeInfinity],
+            "Best Win Chance" => [hasPrice, Channels(scope).Where(channel => channel.Profit.PriceKnown)
+                .Select(channel => channel.WinChance ?? double.NegativeInfinity).DefaultIfEmpty(double.NegativeInfinity).Max(),
+                known.Length > 0 ? known.Max(p => p.ExpectedProfit) : double.NegativeInfinity],
             "Best Plat/Trace" => [PlatPerTrace.HasValue ? 1 : 0, PlatPerTrace is null or 0 ? double.NegativeInfinity : PlatPerTrace.Value],
             "Cheapest" => [hasPrice, known.Length > 0 ? -known.Min(p => p.TotalCost) : double.NegativeInfinity],
             "Best Ducat Farming" => [DucatInfo.DucatsPerPlat.HasValue ? 1 : 0, DucatInfo.DucatsPerPlat ?? double.NegativeInfinity],
-            _ => [CategoryRank(OverallCategory), profits.Max(p => p.WorstCaseProfit), profits.Max(p => p.ExpectedProfit)]
+            _ => [hasPrice, Channels(scope).Where(channel => channel.Profit.PriceKnown).Select(channel =>
+                channel.Profit.ExpectedProfit
+                + Math.Clamp(channel.Profit.ExpectedRoiPct ?? -100, -100, 300) / 25d
+                + (channel.WinChance ?? 0) / 20d
+                - channel.Risk / 20d).DefaultIfEmpty(double.NegativeInfinity).Max(),
+                known.Length > 0 ? known.Max(p => p.ExpectedProfit) : double.NegativeInfinity]
         };
     }
     public static int CategoryRank(string category) => category switch { "green" => 3, "yellow" => 2, "red" => 1, _ => 0 };

@@ -18,15 +18,42 @@ public sealed class RivenTradeChat
     private static readonly Regex TimePrefix = new("^\\s*(?:\\[\\s*\\d{1,2}:\\d{2}(?::\\d{2})?\\s*\\]\\s*)+", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
     private static readonly Regex Brackets = new("\\[([^\\[\\]]{2,160})\\]", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
     private readonly string path;
-    private readonly string[] weapons;
+    private readonly Func<IReadOnlyList<string>> weaponSource;
+    private readonly object weaponGate = new();
+    private IReadOnlyList<string>? weaponSnapshot;
+    private string[] weapons = [];
     private readonly object gate = new();
+    private readonly List<TradeChatOffer> cached = [];
+    private readonly HashSet<string> cachedIds = new(StringComparer.Ordinal);
+    private bool loaded;
     public RivenTradeChat(string path, IEnumerable<string> weapons)
-    { this.path = path; this.weapons = weapons.Where(w => !string.IsNullOrWhiteSpace(w)).Select(w => w.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).OrderByDescending(w => Key(w).Length).ToArray(); }
+    {
+        this.path = path; var fixedWeapons = weapons.ToArray(); weaponSource = () => fixedWeapons;
+        weaponSnapshot = fixedWeapons; this.weapons = NormalizeWeapons(fixedWeapons);
+    }
+    public RivenTradeChat(string path, Func<IReadOnlyList<string>> weaponSource)
+    { this.path = path; this.weaponSource = weaponSource ?? throw new ArgumentNullException(nameof(weaponSource)); }
+    private static string[] NormalizeWeapons(IEnumerable<string> source) => source.Where(w => !string.IsNullOrWhiteSpace(w)).Select(w => w.Trim())
+        .Distinct(StringComparer.OrdinalIgnoreCase).OrderByDescending(w => Key(w).Length).ToArray();
+    private string[] CurrentWeapons()
+    {
+        var snapshot = weaponSource();
+        if (ReferenceEquals(snapshot, Volatile.Read(ref weaponSnapshot))) return Volatile.Read(ref weapons);
+        lock (weaponGate)
+        {
+            if (!ReferenceEquals(snapshot, weaponSnapshot))
+            {
+                Volatile.Write(ref weapons, NormalizeWeapons(snapshot));
+                Volatile.Write(ref weaponSnapshot, snapshot);
+            }
+            return weapons;
+        }
+    }
     private static string Key(string value) => Regex.Replace(value.ToLowerInvariant(), "[^a-z0-9]+", " ").Trim();
     private string? WeaponIn(string value)
     {
         var normalized = " " + Key(value) + " ";
-        return weapons.FirstOrDefault(w => normalized.Contains(" " + Key(w) + " ", StringComparison.Ordinal)
+        return CurrentWeapons().FirstOrDefault(w => normalized.Contains(" " + Key(w) + " ", StringComparison.Ordinal)
             || normalized.Trim().StartsWith(Key(w) + " ", StringComparison.Ordinal));
     }
     private static string Seller(string line, int actionStart)
@@ -67,22 +94,47 @@ public sealed class RivenTradeChat
         }
         return (offers.ToArray(), unparsed);
     }
+    private void EnsureLoaded()
+    {
+        if (loaded) return;
+        if (File.Exists(path)) foreach (var line in File.ReadLines(path))
+        {
+            try
+            {
+                if (JsonSerializer.Deserialize<TradeChatOffer>(line, Json.Options) is not { } row || !cachedIds.Add(row.OfferId)) continue;
+                cached.Add(row);
+            }
+            catch (JsonException) { }
+        }
+        loaded = true;
+    }
     public TradeChatOffer[] Load()
     {
-        if (!File.Exists(path)) return [];
-        var rows = new List<TradeChatOffer>();
-        foreach (var line in File.ReadLines(path)) try { if (JsonSerializer.Deserialize<TradeChatOffer>(line, Json.Options) is { } row) rows.Add(row); } catch (JsonException) { }
-        return rows.ToArray();
+        lock (gate) { EnsureLoaded(); return cached.ToArray(); }
     }
     public TradeChatImport Import(string text, DateTimeOffset? observed = null, string source = "manual")
     {
         var parsed = Parse(text, observed, source);
         lock (gate)
         {
-            var existing = Load().Select(o => o.OfferId).ToHashSet(StringComparer.Ordinal); var added = parsed.Offers.Where(o => existing.Add(o.OfferId)).ToArray();
+            EnsureLoaded(); var added = parsed.Offers.Where(o => cachedIds.Add(o.OfferId)).ToArray();
             var payload = added.Select(o => JsonSerializer.Serialize(o, Json.Options) + "\n").ToArray(); var bytes = payload.Sum(Encoding.UTF8.GetByteCount);
-            if ((File.Exists(path) ? new FileInfo(path).Length : 0) + bytes > 16 * 1024 * 1024) throw new InvalidDataException("Trade-chat log reached 16 MiB; archive it before importing more. Existing data is unchanged.");
-            if (added.Length > 0) { Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!); using var output = new StreamWriter(path, true, new UTF8Encoding(false)); foreach (var line in payload) output.Write(line); }
+            if ((File.Exists(path) ? new FileInfo(path).Length : 0) + bytes > 16 * 1024 * 1024)
+            {
+                foreach (var row in added) cachedIds.Remove(row.OfferId);
+                throw new InvalidDataException("Trade-chat log reached 16 MiB; archive it before importing more. Existing data is unchanged.");
+            }
+            if (added.Length > 0) try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+                using var output = new StreamWriter(path, true, new UTF8Encoding(false)); foreach (var line in payload) output.Write(line);
+            }
+            catch
+            {
+                foreach (var row in added) cachedIds.Remove(row.OfferId);
+                throw;
+            }
+            cached.AddRange(added);
             return new(added, parsed.Offers.Length - added.Length, parsed.Unparsed);
         }
     }

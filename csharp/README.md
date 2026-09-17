@@ -1,26 +1,37 @@
 # RelicFrame C# rewrite — migration preview
 
-**This is not yet a feature-complete replacement for the Python bot. Do not change the production startup file to this preview.** The Python deployment and its private state remain unchanged. See [MIGRATION.md](MIGRATION.md) for the remaining work and release gates.
+**This is still a test-guild build until its live soak checks are complete.** The Python deployment and its private state remain unchanged. See [MIGRATION.md](MIGRATION.md) for the remaining release gates.
 
-The executable is C#/.NET 10, using Discord.Net 3.20.1. It does not run Python, OpenAI or a paid recognition service. Python is used only by the development comparison generator.
+The executable is C#/.NET 10, using Discord.Net 3.20.1. Runtime calculations do not run Python or call OpenAI. Riven and visible Trade Chat screenshots use local Tesseract text recognition; companion features are intentionally absent.
 
 ## Implemented and tested offline
 
 - Relic CSV loading, four refinement tiers, expected/worst-case returns, odds, trace efficiency, ducat efficiency, quantity-aware purchases, exact distributions and labelled Monte Carlo estimates.
-- Seven ranking modes, seller availability/vault/ROI/cost/reward filters and persisted seller exclusions applied before calculation.
+- Nine ranking modes (including Lowest Risk and Best Win Chance), seller availability/vault/ROI/cost/reward filters and persisted seller exclusions applied before calculation.
 - Compressed full order records, atomic snapshots, shared 5-request/second HTTP pacing, bounded concurrency, deadlines, retry/backoff and cancellation. No arbitrary top-N truncation of an order book.
-- Background relic-market refresh with catalog caching, ducat fallback, retained old data and honest timestamps after failed fetches.
-- Smoothed stalest-book REST reconciliation across each five-minute sweep, plus an optional bounded Warframe.market `newOrders` WebSocket latency layer. REST remains authoritative because the public stream does not report every third-party close/edit.
-- Riven stat ranges, numerical roll quality, supplied curated roll rules, comparable-ask deal scoring and official weekly trade ceilings.
-- Background Riven scans that evaluate every catalog family against stat-search results, disk-backed deduplication, saved candidate indexes, bounded weekly history, stop/restart and seller/listing links. Search-result caps mean **not every listing is available**; the bot must not claim otherwise.
-- Explicit manual Riven trade-chat text imports with local deduplication and offer summaries. These are offers, not confirmed sales; there is no passive game-chat interception.
-- Manual-trait companion appraisal from existing private JSONL evidence, distinguishing current versus historical evidence and listings versus confirmed sales. Natural-color rarity classification from supplied names.
-- An offline `RelicFrame.Tools` importer for DiscordChatExporter HTML/JSON that preserves source files and produces appraiser-compatible private JSONL. It is separate from the always-on bot so export processing does not consume hosting RAM.
-- A test-guild Discord preview with immediate deferred acknowledgement, two calculation workers, a bounded queue, and a separate fast status command.
-- Test-guild world feeds: automatic `WARFRAME LIVE` setup, the requested visible channel names, persistent role buttons, all base/Arbitration/fissure-tier roles, one-minute background updates, per-channel replacement pings, Cascade split by normal/Steel Path, `Lvl <grade> tier` fissure labels, and fresh official-DE fissure fallback when the translated source is stale.
-- Managed board cleanup retains the current board/ping and removes older messages authored by the bot. It never purges user-authored messages; manually selected relic-panel channels are not cleaned.
+- Background relic-market refresh with catalog caching, ducat fallback, retained old data and honest timestamps after failed fetches. Startup catalog outages retry automatically each minute instead of leaving the worker stopped until a manual command. The first full relic-book pass takes priority over the automatic background Riven sweep, and status reports attempted books with the remaining five-request/second floor; this prevents Riven ingestion from extending the relic bootstrap while preserving one shared rate budget.
+- Smoothed stalest-book REST reconciliation across each five-minute sweep, plus an optional bounded Warframe.market `newOrders` WebSocket latency layer. The socket does not remove REST rate limits or supply the initial order books. REST remains authoritative because the public stream does not report every third-party close/edit.
+- Riven appraisals combine exact/near-roll asks, entered roll quality, optional WTS/WTB evidence, listing age, observed closures and the stale DE completed-trade archive at low weight. A median/MAD filter removes isolated extreme asks from pricing and reports how many were excluded. At least five ask comparables are required before old-listing age can apply a small −2% to −10% stale-ask adjustment. At least three confirmed sales with timing are required before median listing-to-sale speed can apply a capped +5% to −8% adjustment; one report never moves price for speed. Both adjustments are printed. Trade Chat needs at least three priced observations on one side before it can move an estimate, and its influence is capped. The DE feed is explicitly dated 13 May 2024. Appraised families are revisited automatically; closures are never mislabeled as sales because withdrawals cannot be distinguished publicly. Quick, fair and patient prices use separate sale-speed targets.
+- The Windows and Linux launchers enable two read-only Trade Chat collectors. `EE.log` supplies only your outgoing WTS/WTB/WTT posts (`ee-log-outgoing`). The screen OCR reader supplies visible incoming offers (`screen-ocr-incoming`) only from the configured Warframe capture, skips identical frames, immediately discards screenshots, and never sends input, reads memory, or intercepts traffic. Linux supports foreground-window X11 capture, explicit-region Wayland capture, and an external capture-file fallback. Both collectors are advertisement evidence, never confirmed sales.
+- Appraisal messages include **Record sold**, **Still listed**, and **Withdrawn** controls. A sale accepts its actual platinum price plus optional listed/sold timestamps, receives stronger weight than asks, and is saved in the C# runtime. Invalid/future timestamps and prices are rejected; identical submissions from one reporter are ignored for ten minutes. Still-listed and withdrawn outcomes are retained without becoming sales.
+- Automatic setup creates **RIVEN APPRAISAL / #riven-appraisal** with a guided, uploader-gated workflow. Slash commands and panel interactions are private; a draft created by directly posting an image remains visible in that dedicated channel, but only its uploader can edit, confirm, or cancel it. A weapon lookup produces class-specific menus: exactly 2–3 positive selections and one negative selection (including No negative). Slash-command stat autocomplete also narrows itself to the selected weapon's class once the weapon field is filled; only reference-data startup falls back to the complete list. Each firearm class and Melee/Zaw only receives legal attributes. Legacy marketplace names `channeling_damage` and `channeling_efficiency` are accepted but displayed as **Initial Combo** and **Heavy Attack Efficiency**.
+- Riven screenshot OCR is entirely local and non-AI. Up to eleven Tesseract/preprocessing passes vote on the structured result. The parser tolerates elemental icons and other non-letter glyphs between a percentage and its label, decodes the generated Riven prefix/core/suffix as an independent check on positive attributes, and rejects numbers outside the plausible disposition/class range. This prevents failures such as reading `+84.9% Electricity` as `+1% Fire Rate`. The editable confirmation remains mandatory because screenshots can still be ambiguous.
+- Riven screenshots use local, non-cloud Tesseract OCR. You can attach one to `/rf-riven appraise image:`, use the channel's **Appraise screenshot** Discord-link button, or simply post the image in **#riven-appraisal**. Plain image posts are ignored everywhere else. Complementary passes cover scaled color, purple-sensitive grayscale, deskewing, adaptive Otsu and Sauvola, plus card/footer regions for full-screen, phone, and tight crops; pass consensus is reconciled against known weapon/stat names. MR and rerolls require cross-pass agreement instead of trusting the first stray digit; mod rank stays editable because the in-game card uses decorative pips rather than reliable rank text. If a four-stat card loses its tiny minus glyph, every possible fourth attribute is checked against shared disposition/stat-range consistency before the negative is provisionally identified and disclosed for verification. Faction multipliers are converted around x1: `x1.59` becomes `+59%`, while `x0.6` becomes the `−40%` negative. Every result must be confirmed or edited before appraisal. Image bytes and recognized text exist only for the active request/session and are never written to disk. This is deterministic parsing and local text recognition—there is no OpenAI, LLM, or generative-AI request path.
+- Endo buying is deliberately separate: setup creates **RIVEN ENDO / #riven-endo-buying** with its own guided search. Dissolve value uses `(100 × (MR − 8)) + floor(22.5 × 2^mod rank) + (200 × rerolls) − 7`. The Endo board and `/riven flips purpose:Endo` rank cheap Rivens independently of roll desirability and support budget, seller-status and maximum-p/1k filters. Roll appraisals do not show or request Endo fields.
+- Background Riven scans evaluate every current Warframe.market catalog family. The 418-family roll guide is the primary gate for known weapons; it defines mandatory stat pairs, alternative desirable pools, supported harmless negatives and weapon-specific notes. A clearly labelled disposition-aware class/market fallback covers future newly released, unprofiled, or class-incompatible families. Live asks rank and price rolls but cannot overrule a curated build requirement. A failed scan retains the last complete index, logs its full error, and retries instead of silently killing the worker. Candidate indexes, profile-coverage counts, weekly history, listing observations and seller/listing links are saved with bounded storage. Search-result caps mean **not every listing is available**.
+- A test-guild Discord preview with immediate deferred acknowledgement, three calculation workers, a bounded queue, and a fast status command that does not rebuild market snapshots.
+- Test-guild world feeds: automatic `WARFRAME LIVE` setup, persistent role buttons, one-minute source checks, per-channel replacement pings, and Cascade split by normal/Steel Path. Relic mission tiers follow the configured grading rule: Void Cascade S; Capture, Rescue and Extermination/Crossfire A; Void Flood and Alchemy B; Survival, Excavation, Hijack, Sabotage, Interception, Mobile Defense and Spy F. Defense alone inherits the matching node's published Arbitration Defense tier, with C as the safe fallback when that node has no published match. Rewards such as Steel Essence remain hidden tie-breakers inside a letter tier and can never change the assigned tier. Fissure rows sort tier first and then the hidden tie-breaker, and display only `Relic era — Mission — Grade — Node — Planet`; long lists paginate without dropping locations. Fresh official-DE fissure fallback keeps the boards current when the translated source is stale. Arbitrations independently use browse.wf's published hourly rotation plus the live node dictionary and persist a validated `runtime/arbitration_schedule.json` last-known-good cache. The bounty channel renders every current Holdfasts, Cavia, and Hex job with node, mission, bonus objective, ally, rotation, and expiry information; oversized syndicate sections paginate across embeds instead of silently truncating jobs. Reviewed Höllvania node fallbacks prevent stale translated-node data from exposing raw `SolNode850`–`SolNode858` IDs.
+- THE LIST's vaulted-value boards require a **Vaulted** relic containing at least one **Vaulted** reward with a current online ask of 5p or more. Mixed Vaulted/Unvaulted rewards remain eligible, but an Unvaulted reward cannot qualify one by itself; **Show drops** uses only the labels **Vaulted** and **Unvaulted**. Every ranking channel's drop view uses the same deterministic Rare → Uncommon → Common order, with higher modeled value and then name breaking ties, instead of trusting inconsistent source-CSV row order. Best Overall is a profit/ROI/win/risk composite rather than treating every tiny guaranteed return as superior.
+- Reward valuation now separates supply behavior. Vaulted rewards retain the actionable online floor, falling back to the recent-visible lower median when nobody is online. For Unvaulted rewards, the bot takes the median of the five cheapest recent visible asks, blends it with the current online floor, and caps the result at 150% of the broader baseline. This prevents a common part such as Braton Prime Receiver from jumping to one remaining seller's price when cheaper sellers merely go offline. **Show drops** prints the online floor and recent-visible median beside every stabilized Unvaulted estimate. Personal Market remains separate but consumes this stabilized value, excluding the owner's own listing before applying its undercut.
+- The in-Discord guide is a detailed replacement guide covering setup, health, every world channel, notifications, bounties, all nine relic rankings and formulas, appraisal, flips, Endo, EE.log limitations, evidence labels, efficiency and safety. Setup updates the existing guide message rather than leaving an obsolete copy.
+- THE LIST also includes **#prime-part-prices**. It pages every Prime reward in the loaded Vaulted and Unvaulted relic catalog from highest to lowest estimated sell price. Selecting a part returns a private detail card with its price basis and every source relic, rarity, and Vaulted/Unvaulted state. It reuses the existing reward books and five-minute board pass, so it adds no duplicate API sweep.
+- Prime-part selections acknowledge Discord immediately and query only the selected cached reward book. They do not rebuild the entire sorted table inside the interaction, preventing Discord `10062 Unknown interaction` timeouts.
+- The relic market loader fetches reward prices for **both Vaulted and Unvaulted relics** in one shared pass. THE LIST applies its Vaulted-only qualification after loading, so Unvaulted relics stay hidden there while their Prime-part prices remain available to Personal Market. Automatic setup creates an owner-only **PERSONAL MARKET / #personal-market** board that reads AlecaFrame's local inventory and, only when explicitly enabled, reuses the local AlecaFrame Warframe.market JWT without printing or copying it. Personal Market considers every mapped Prime part you own—Vaulted and Unvaulted—and shares the relic loader's compressed books and global 5-request-per-second budget. Its listing rules remain separate from THE LIST filters. It creates or updates visible sell orders at 1–3p below the stabilized online/recent-visible market value without crossing the 10p default floor. Automatic reconciliation runs every five minutes, and the manual Sync button refreshes owned-item books before reconciling. Existing sell orders for eligible items are adopted; no more than 25 account writes occur per sync, with removals processed first. Managed listings are deleted when AlecaFrame says the item is no longer owned or when a fresh item book makes it ineligible; stale or failed price data never causes a deletion. Each successful account mutation is checkpointed immediately so a restart cannot resurrect stale managed-order state. Only a confirmed managed-order quantity reduction is recorded as a sale; disappearance alone is not treated as proof. Use the channel's emergency Pause button to stop writes immediately.
+- Feature 2 adds the owner-only **PERSONAL MARKET / #prime-set-completion** board. It reads the same sale-adjusted AlecaFrame inventory and ranks sets that are exactly one component type away by `set value - missing-component purchase cost`. Required quantities come from Warframe.market's v2 `quantityInSet` metadata, so dual blades/handles are counted correctly. Set composition is fetched lazily only for families represented in the inventory, persisted in `csharp/runtime/prime_set_components.json`, and reused after restart. Set and missing-part prices are added to the existing shared order-book scanner at low priority; this is not a second bulk market scan. The board is advisory and never buys, crafts, or creates set listings.
+- Unchanged world/list messages are no longer fetched or edited. Expensive 500-message cleanup scans run once during setup, THE LIST refreshes every five minutes instead of every minute, and repeated seller lookups are shared across ranking channels. Unexpected per-cycle failures are logged and retried while the last complete boards remain visible instead of terminating a background worker. User-authored messages are never purged.
+- Computed 1,358-book market snapshots are shared for ten seconds, with a one-second cache during bootstrap. Relic drop buttons read only the six relevant order books. Relic, Riven, world-role, OCR/evidence, and personal-market component work is dispatched outside Discord's gateway callback so one slow API or Discord operation cannot stall unrelated events.
 
-The tests contain 2,845 synthetic cross-language cases, plus injected HTTP/lifecycle/storage tests. Passing these tests does not certify the unported features or real Discord operation.
+The tests contain 2,751 synthetic cross-language cases, plus injected HTTP/lifecycle/storage tests. Passing these tests does not certify real Discord operation.
 
 ## Build and verify
 
@@ -28,7 +39,6 @@ Install the .NET 10 SDK. From the repository root:
 
 ```powershell
 dotnet build csharp/RelicFrame.Bot -c Release
-dotnet build csharp/RelicFrame.Tools -c Release
 python csharp/generate_parity.py
 dotnet run --project csharp/RelicFrame.Tests -c Release -- csharp/fixtures.generated.json
 dotnet csharp/RelicFrame.Bot/bin/Release/net10.0/RelicFrame.Bot.dll
@@ -40,18 +50,11 @@ On this workspace the local SDK is `.tools/dotnet/dotnet.exe`, and the existing 
 
 No arguments prints the preview notice and exits without connecting to anything.
 
-Import private breeding exports offline with:
-
-```powershell
-dotnet run --project csharp/RelicFrame.Tools -c Release -- companion-export csharp/runtime/companion-import "export-one.json" "export-two.html"
-dotnet run --project csharp/RelicFrame.Tools -c Release -- companion-folder "folder-of-txt-and-images" csharp/runtime/portable-chat
-```
-
-The importers never change their source exports. `companion-folder` groups matching TXT/images and creates escaped portable HTML, text and JSONL with copied assets. Output is private runtime data and ignored by Git; review heuristic evidence before using it. The supplied 3,900-message JSON sales export produced the exact same message, attachment, classification and deduplication counts as the Python analyzer. The much larger historical HTML exports still require a peak-memory/streaming validation before they should be processed on a small host.
-
 ## Optional test-guild run
 
 Use a **separate Discord test application** and a disposable test server. Do not run two deployments using the production token. Set these variables through the host's secret/environment settings; never commit their values or paste them into chat:
+
+For direct screenshot posts, enable **Developer Portal → Bot → Privileged Gateway Intents → Message Content Intent**. Discord hides ordinary guild-message attachments from bots without that intent. The handler still ignores message text and every channel except the configured `#riven-appraisal` channel.
 
 | Variable | Purpose |
 | --- | --- |
@@ -59,7 +62,38 @@ Use a **separate Discord test application** and a disposable test server. Do not
 | `RELICFRAME_TEST_GUILD_ID` | Selected test server; required only with `--test-bot` |
 | `RELICFRAME_DATA_DIR` | Public data and optionally private evidence directory; default `relicframe/data` |
 | `RELICFRAME_RUNTIME_DIR` | Writable C#-only cache/state directory; default `csharp/runtime` |
-| `RELICFRAME_WFM_WEBSOCKET` | Optional `true` enables WFM's global new-order stream; REST remains authoritative |
+| `RELICFRAME_WFM_WEBSOCKET` | Enabled by default for WFM's global new-order stream; set `false` to disable it. REST remains authoritative. |
+| `RELICFRAME_EE_LOG` | Optional `true` watches the local Warframe log for your outgoing trade posts; both launchers default this to `true` |
+| `RELICFRAME_EE_LOG_PATH` | Optional path override; defaults to `%LOCALAPPDATA%\Warframe\EE.log` on Windows and auto-detects common Steam/Proton prefixes on Linux |
+| `RELICFRAME_TRADE_OCR` | Optional `true` reads visible incoming Trade Chat; both launchers default this to `true` |
+| `RELICFRAME_TRADE_OCR_SECONDS` | OCR interval in seconds, clamped to 3–60; default `5` |
+| `RELICFRAME_TRADE_OCR_REGION` | Fractional `x,y,width,height` crop inside Warframe; default `0,0.34,0.72,0.62` |
+| `RELICFRAME_TRADE_OCR_LINUX_GEOMETRY` | Wayland-only absolute `x,y,width,height` screen crop used by `grim` |
+| `RELICFRAME_TRADE_OCR_ASSUME_WARFRAME` | Wayland safety acknowledgement; must be `true` before the explicit screen crop is captured |
+| `RELICFRAME_TRADE_OCR_CAPTURE_FILE` | Cross-platform fallback path to a PNG/JPEG that an external capture tool replaces; maximum 16 MiB |
+| `RELICFRAME_PERSONAL_USER_ID` | Optional Discord user ID allowed to see/use PERSONAL MARKET; defaults to the server owner |
+| `RELICFRAME_PRIME_INVENTORY_JSON` | Optional inventory source override; automatically uses `%LOCALAPPDATA%\AlecaFrame\lastData.dat` when present, otherwise `csharp/runtime/prime_inventory.json` |
+| `RELICFRAME_PERSONAL_MIN_PLAT` | Minimum eligible market price and listing floor; default `10` |
+| `RELICFRAME_PERSONAL_UNDERCUT` | Reduction below the lowest non-outlier seller, clamped to `1`–`3`; default `1` |
+| `RELICFRAME_WFM_USER_SLUG` | Your Warframe.market profile slug, used only to exclude your own listing from price comparison |
+| `RELICFRAME_WFM_TOKEN` | Optional Warframe.market JWT for Personal Market account writes; keep it in host secrets |
+| `RELICFRAME_WFM_TOKEN_FILE` | Optional path to a local Warframe.market JWT file; Linux default is `csharp/runtime/wfm-token.txt` |
+| `RELICFRAME_PERSONAL_AUTO_PUBLISH` | Optional `true`/`false` first-run override for authenticated automatic listing; the channel Pause button persists afterward |
+
+The same non-secret identifiers and defaults can be kept in the ignored local file `csharp/runtime/personal_market_settings.json`. Environment variables override that file. Never put an email, password, session cookie or access token in it.
+
+The manager reads AlecaFrame's local `lastData.dat` inventory cache directly when available on Windows. On Linux, point `RELICFRAME_PRIME_INVENTORY_JSON` at a copied, synchronized, or mounted `lastData.dat` or JSON inventory. AlecaFrame refreshes that cache during Warframe login/loading screens, so travel to a Relay/Dojo and return to the Orbiter when it is stale, then press **Sync listings now**. Eligibility does not depend on vault status: an Unvaulted part is included whenever you own it, its shared scanner book loaded, and its stabilized market value meets your minimum. A part whose stabilized value is below the floor is intentionally omitted and named in the board's skip summary. With the account owner's explicit authorization, automatic listing reads the configured token only when making authenticated order requests. It never prints or logs the token and never collects login credentials. `RELICFRAME_PRIME_INVENTORY_JSON` can point to a full inventory object containing `Recipes` and `MiscItems` rows with `ItemType`/`ItemCount`, an AlecaFrame-style object whose `InventoryJson` field contains that JSON, or a small manually controlled list:
+
+For a private parser diagnostic that prints counts but never item names, run `dotnet RelicFrame.Bot.dll --profile-inventory <path-to-lastData.dat>`.
+
+```json
+[
+  { "itemName": "Glaive Prime Blueprint", "quantity": 2 },
+  { "itemName": "Wisp Prime Systems Blueprint", "quantity": 1 }
+]
+```
+
+Names must match Warframe.market. The inventory file remains local; only eligible item names, quantities, current asks, listing prices, and the latest tracked managed-order sales appear in the owner-only channel. Account sync creates or updates visible sell orders, caps each pass at 25 writes, and deletes managed orders only when the item is no longer owned. A managed order's confirmed quantity reduction is written to the persistent local sale history; disappearance alone is reported but does not erase inventory or fabricate a sale. A raw AlecaFrame inventory decrease by itself also never proves a sale.
 
 Do not point the runtime directory at Python's working directory or private export directories. The C# preview does not load `.env`, register global commands, delete Python commands, migrate production role/channel IDs or automatically start scans.
 
@@ -67,20 +101,72 @@ Do not point the runtime directory at Python's working directory or private expo
 dotnet csharp/RelicFrame.Bot/bin/Release/net10.0/RelicFrame.Bot.dll --test-bot
 ```
 
+On Windows, the checked-in launcher selects `.tools\dotnet\dotnet.exe` when present, builds Release, validates the required environment variables, and starts the bot:
+
+```powershell
+.\csharp\run-bot.cmd
+```
+
+The `.cmd` wrapper starts the checked-in PowerShell launcher with a process-only execution-policy bypass, so it also works when direct `.ps1` execution is disabled. Use `.\csharp\run-bot.cmd -NoBuild` only after a successful Release build. You can alternatively run the script directly after allowing only the current PowerShell process:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\csharp\run-bot.ps1
+```
+
+The launcher prompts once for the Discord bot token with hidden input and for the server ID. It saves them to `csharp/runtime/launch-credentials.xml` as a Windows DPAPI-protected PowerShell credential tied to the current Windows user; the token is not readable plaintext and the entire runtime directory is Git-ignored. Later launches load it automatically. Environment variables override the saved values. To discard it and enter a replacement, run `run-bot.cmd -ForgetCredentials`. `run-bot.cmd` also supplies the execution-policy bypass automatically:
+
+```powershell
+.\csharp\run-bot.cmd
+```
+
+On Linux, install the .NET 10 SDK and run the native launcher:
+
+```bash
+chmod +x csharp/run-bot.sh
+./csharp/run-bot.sh
+```
+
+It prompts once and stores the token and guild ID in separate mode-`600` files under the ignored `csharp/runtime` directory. Environment variables still take precedence. Use `./csharp/run-bot.sh --no-build` after a successful Release build or `--forget-credentials` to replace them. For live Trade Chat OCR under X11, install `xdotool` and ImageMagick (`magick` or `import`). Under Wayland, install `grim` and set both `RELICFRAME_TRADE_OCR_LINUX_GEOMETRY` and `RELICFRAME_TRADE_OCR_ASSUME_WARFRAME=true`. A headless server can use `RELICFRAME_TRADE_OCR_CAPTURE_FILE`, but it cannot see a different computer's Warframe window unless that image and any `EE.log`/inventory files are securely mounted or synchronized.
+
 Available test commands:
 
-- `/rf-status`: responsiveness, gateway latency, memory and worker status.
+- `/rf-status`: responsiveness, gateway latency, memory, command-queue depth and worker status. It also shows one overall loading ETA: measured market-bootstrap time plus any remaining low-priority Riven work, followed by the active Riven scan stage. The ETA recalculates from observed throughput and changes to `ready` when no startup/background scan is active.
 - `/rf-relics refresh` / `stop`: start/cancel the shared background price worker; requires Manage Server.
 - `/rf-relics list`, `detail`, `find`, `odds`, `compare`, `buyn`, `help`.
 - `/rf-relics blacklist-add`, `blacklist-remove`, `blacklist-list`; changes require Manage Server.
-- `/rf-riven refresh` / `stop`: start/cancel the recurring scanner; requires Manage Server.
-- `/rf-riven flips`: page all cached candidates with weapon/budget/ROI/online filters; includes rolls, links and copyable whispers.
-- `/rf-riven price`, `top`, `chatlog`, `chatstats`, `guide`: weekly aggregates, explicit offer-text imports and usage instructions.
-- `/rf-companion appraise`: manually supply natural traits against private evidence; `/rf-companion guide` explains photos, inherited traits, color tiers and historical two-imprint ranges.
+- `/rf-riven appraise`: either attach a screenshot for local OCR plus private edit/confirmation, or manually choose a weapon, two or three positive stats, an optional negative and displayed values. It reports exact/near live asks by price band, trade-chat bid/ask context, weekly completed-family evidence, listing/closure timing, confirmed user-reported sales, confidence, and quick/fair/patient prices. Use its buttons to record the later outcome without adding another slash command.
+- `/rf-riven desired`: browse every indexed weapon four at a time, or select one weapon. Each row shows its curated/fallback desired-roll expression, supported low-impact negatives, filtered low/median/high qualifying asks, online sample count, and separately labelled legacy DE unrolled/rerolled family medians. Current figures are listing asks rather than confirmed sales.
+- `RIVEN APPRAISAL / #riven-desired-rolls`: persistent eight-row pages of the same index. Weapons with locally observed WTB posts in the last 30 days rank first by WTB count; remaining ties use the legacy DE completed-trade popularity, current qualifying online supply, then name. The board edits one saved message after index/demand changes and never claims that supply counts are buyer demand.
+- `/rf-riven flips`: filter the automatically refreshed full-market index by maximum buy, discount and seller status; includes the roll, curated per-weapon profile (or labelled fallback), links and copyable whisper.
 - `/rf-world setup`, `refresh`, `start`, `stop`, `status`, `help`: repair and control the C# world boards. Setup/start/stop/refresh require Manage Server; setup also requires the bot to have Manage Channels and Manage Roles.
-- `/rf-panel setup`, `config`, `refresh`, `start`, `stop`, `status`, `help`: persistent Radiant-by-default ranking board, saved filters and its one-minute kill switch.
+- `/rf-panel setup`, `config`, `refresh`, `start`, `stop`, `status`, `help`: the persistent `THE LIST` category with nine ranking channels, including `lowest-risk` and `best-win-chance`, plus `how-it-works`. **Best ROI** uses raw percentage return, with risk and profit only breaking ties. **Guaranteed Profit** excludes every relic whose least valuable reward does not beat total cost. Ranking messages have page buttons, a relic selector, reward details, and copyable seller `/w` text.
 
-Refinement defaults to Radiant. A relic refresh sweeps its required books, then waits five minutes; the saved result panel renders every minute using its persisted filters, while `/rf-panel stop` is its kill switch. World boards poll each minute. Riven scans wait 15 minutes between passes. `/rf-status` remains outside the calculation queue. No command automatically sends messages to sellers or purchases anything. World role pings are opt-in, baseline on first observation, and emitted only for newly observed signatures.
+Refinement defaults to Radiant. A relic refresh sweeps its required books continuously across five minutes; the saved result panel renders every five minutes using persisted filters and only writes to Discord when its visible result changes. `/rf-panel stop` is its kill switch. World sources poll each minute, while unchanged boards produce no Discord fetch/edit/cleanup traffic. The Riven scanner starts with the bot and waits 15 minutes between passes. `/rf-status` remains outside the calculation queue. No command automatically sends messages to sellers or purchases anything. World role pings are opt-in, baseline on first observation, and emitted only for newly observed signatures.
+
+If the combined WarframeStat.us world endpoint fails, the bot falls back to Digital Extremes' official feed for fissures, Steel Path fissures, Void Storms and Cascade fissures. Boards that the official feed cannot supply retain their last complete data instead of being erased; the bot retries the combined source on the next cycle. The host log identifies the failing source host/path and HTTP status without printing response bodies or credentials. Screenshot appraisal drafts remain usable after a pricing failure, so correct them with **Edit OCR** or press **Confirm & appraise** again.
+
+The EE.log collector checkpoints its byte position, detects file replacement/truncation, imports existing outgoing offers once, and then reads only newly appended complete lines. Incoming chat comes from local Tesseract OCR: keep Trade Chat open and Warframe foreground for automatic Windows/X11 capture, preferably in borderless/windowed mode. Every five seconds the bot captures the configured rectangle; unchanged images do not run OCR. Every recognized player message is deduplicated into the bounded private `csharp/runtime/trade_chat_screen.jsonl` archive so it can be reprocessed later; recognized Riven offers also enter `riven_trade_chat.jsonl` for appraisal. That offer log is loaded once and updated in memory instead of being reread after every OCR frame, and newly published marketplace weapon names become parseable without restarting. One damaged archive line no longer prevents later valid deduplication records from loading. Captured screenshots are never saved by the bot. `/rf-status` shows separate outgoing-log and visible-screen counters, OCR confidence, crop and state. Adjust `RELICFRAME_TRADE_OCR_REGION` if chat falls outside the default crop. OCR evidence can be incomplete or incorrect and is never treated as a completed sale. Digital Extremes considers third-party software use at the player's own risk.
+
+## Riven grading, builds and trade interpretation
+
+For a rank-8 Riven, the modeled midpoint is `base stat × stat-count multiplier × variant disposition`; the rolled value varies from roughly 90% to 110% of that midpoint. The implemented positive multipliers are 0.99 for 2+/0−, 1.2375 for 2+/1−, 0.75 for 3+/0− and 0.9375 for 3+/1−. Negative multipliers are 0.495 for 2+/1− and 0.75 for 3+/1−. Weapon-class base values live in `RivenPricing.Bases`; the negative Chance to Gain Combo Count malus uses its separate 104.85% basis.
+
+When displayed values are entered, appraisal grades every stat by variance from its expected midpoint: **S** 9.5% or better, **A+** 7.5–9.5%, **A** 5.5–7.5%, **A−** 3.5–5.5%, **B+** 1.5–3.5%, **B** −1.5–1.5%, **B−** −3.5 to −1.5%, **C+** −5.5 to −3.5%, **C** −7.5 to −5.5%, **C−** −9.5 to −7.5%, and **F** below −9.5%. Negative values reverse the direction: a smaller penalty receives the better grade. Grade only measures how high that stat rolled. It does not turn an undesirable stat into a desirable one, establish a breakpoint, or prove market value.
+
+The best-stat model therefore separates **roll height**, **weapon/build usefulness**, and **trade evidence**. It applies one shared desirability decision to guided appraisal, slash-command appraisal, manual flip search and the automatic all-family flipper. For each known weapon, the curated expression is evaluated as alternatives: standalone tokens are mandatory, slash-separated tokens are choices from an allowed pool, every positive must be useful to the selected alternative, at least two positives must be desired, and any negative must appear in that weapon's supported low-impact list before the roll is called a preferred selling roll. Attributes that cannot roll on the resolved weapon class are removed from the working profile and reported in its notes, preventing source-sheet mistakes such as Zoom on a shotgun from leaking into appraisal or flips. The UI now displays that expression, supported negatives, conditional notes and whether the source was curated or fallback.
+
+For an unprofiled/new weapon, the bot does **not** pretend it has researched a perfect build. It labels the result **market/class fallback**, starts with legal class priorities, adjusts Critical Chance for disposition and shotgun scaling, and uses only stat premiums supported by enough current asks. This keeps every catalog family operable while lowering the epistemic claim. Current asking prices may reorder fallback priorities and price comparable rolls; they cannot override mandatory pairs or exclusions in a curated profile.
+
+Critical Chance is strongly disposition-sensitive and is down-weighted below 0.9 disposition. Shotgun Riven Critical Chance is conservatively down-weighted because its Riven base is only 90%; it normally cannot replace Critical Deceleration by itself. Critical Damage is valuable only when the weapon's actual build already uses a Critical Damage mod. A 3-desired-positive/1-supported-negative roll ranks ahead when evidence is otherwise comparable. −Finisher Damage is not automatically harmless on melee, especially nikanas, daggers, dual daggers, claws, swords, fists, scythes and Melee Crescendo builds. Arbitrary prose conditions are displayed for review rather than silently assumed true; a weapon's form, evolution, augment and exact build can still change the correct answer.
+
+Weapon-profile conditions are applied before an asking price can influence the recommendation. For Verglas, the curated `CC + MS + CD` route requires the Riven's Critical Chance to exceed the 257.2% Tenacious Bond breakpoint. At 1.3 disposition, a 3-positive/no-negative Verglas Riven has a modeled CC ceiling around 160.9%, so that entire route is invalidated. `CC + CD + MS with no negative` then falls back to the `MS + Fire Rate` route; Multishot is individually useful, but the mandatory pair is incomplete, so the bot reports **0/3 effective desired positives** and a non-preferred selling roll. A poor roll is pulled toward the stable lower-price portion of current listings instead of copying inflated exact-stat asks. The result prints both the failed condition and individually useful-stat context.
+
+Numeric requirements use the same evaluator in appraisal and flip eligibility. Hard checks currently cover Verglas Critical Chance, Exergis Magazine Capacity, Rubico Multishot, Simulor orb-stacking Multishot, Vulkar Critical Chance and Zenith Multishot. When displayed values are omitted, an appraisal rejects a route only when its modeled maximum cannot reach the requirement; indexed auctions are checked against their actual roll value.
+
+Rivens can have 2–3 positives and zero or one negative. More positive lines reduce each percentage; a negative increases the positive multipliers. Disposition is variant-specific and affects percentages, not which family can equip the Riven. Legacy/vintage Channeling lines are historical collectibles and must not be confused with the marketplace API's legacy internal names for modern Initial Combo and Heavy Attack Efficiency. Listings—including extreme asks—do not prove a sale. The appraiser keeps current asks, Trade Chat advertisements, observed closures, explicitly recorded sales and DE's stale family aggregate separate.
+
+Common repeatable sources include Sorties, Archon Hunts, Steel Path Duviri Circuit, Palladino's weekly Riven Sliver offerings and Acrithis offerings. Other periodic or one-time sources include Teshin's Steel Essence rotation, Nightwave, Gifts of the Lotus, milestone login caches and eligible quests. Archgun and companion-weapon Rivens have their own vendor paths. Availability and costs can change, so the in-game vendor and current official notes remain authoritative.
 
 ## Memory measurements and limits
 
@@ -94,11 +180,11 @@ dotnet csharp/RelicFrame.Bot/bin/Release/net10.0/RelicFrame.Bot.dll --profile-ho
 Initial Windows measurements:
 
 - 500 books / 100,000 synthetic orders: 22.7 MiB baseline, 40.2 MiB retained working set, 1.090 s build and 0.560 s full-book query.
-- Disconnected preview host: 768 relics, six Discord command groups, Discord client objects and Riven rules at 42.3 MiB working set.
+- Disconnected preview host: 768 relics, ten Discord command groups, Discord client objects and Riven rules at roughly 44 MiB working set on this workstation.
 
 These are **not full-bot or Linux-container measurements**, and must not be represented as proof of lower RAM than Python or suitability for a 256 MiB server. The disconnected profile performs no Discord login, private-evidence load or live API request.
 
-Workstation GC is enabled. API bodies are capped at 8 MiB each; concurrency defaults to four. Exact probability distributions stop at 250,000 states rather than exhausting RAM; retry Buy-N with `approximate: True`. Riven temporary data has a 128 MiB disk budget, with an 8 MiB unique-record budget per decoded family. A budget failure is reported, and the last completed index is retained—not silently replaced by truncated results. The budgets do not by themselves bound the entire process working set.
+Workstation GC is enabled. API bodies are capped at 8 MiB each; concurrency defaults to four. Exact probability distributions stop at 250,000 states rather than exhausting RAM; retry Buy-N with `approximate: True`. Riven temporary data has a 128 MiB disk budget, with an 8 MiB unique-record budget per decoded family. Immediate repeated lookups share a 30-second response; stale entries are removed and the cache is capped at 64 families. Listing-lifecycle changes stay in memory during a multi-weapon scan and are persisted once at scan end, periodically during interactive use, and on shutdown rather than rewriting the full observation file per weapon. Completed or abandoned appraisal sessions are removed or expire after 30 minutes. A budget failure retains the last completed index instead of publishing truncated results.
 
 ## Before production cutover
 
@@ -106,11 +192,11 @@ Finish the migration checklist, test permissions and interactions in a test guil
 
 ## Isolated Linux preview container
 
-The preview has a multi-stage .NET 10 container that copies only explicitly listed public data. The Docker context denylist prevents private breeding exports, runtime state, environment files and keys from entering the image. From the repository root:
+The preview has a multi-stage .NET 10 Linux container that copies only explicitly listed public data. Discord boards, market/world data, Personal Market with mounted inventory/secret configuration, and attached-image Riven OCR work in the container. Direct host-window capture does not cross the container boundary; mount a capture file and set `RELICFRAME_TRADE_OCR_CAPTURE_FILE` when that feature is needed. The Docker context denylist prevents private breeding exports, runtime state, environment files and keys from entering the image. From the repository root:
 
 ```bash
 docker build -f csharp/Dockerfile -t relicframe-csharp-preview .
 docker run --rm -e RELICFRAME_CSHARP_TOKEN -e RELICFRAME_TEST_GUILD_ID -v relicframe-csharp-state:/data relicframe-csharp-preview
 ```
 
-Or run `docker compose -f csharp/compose.preview.yaml up --build`. Keep using a separate test bot/server. The persistent `/data` volume retains only C# cache and control state across restarts. Private companion evidence is intentionally absent; copy reviewed evidence into a separately mounted data directory only during the later migration test. This image does not make a Python-only hosting plan support .NET.
+Or run `docker compose -f csharp/compose.preview.yaml up --build`. Keep using a separate test bot/server. The persistent `/data` volume retains only C# cache and control state across restarts, including the automatically downloaded Arbitration rotation. A legacy schedule at `/data/arbitration_schedule.txt` remains an optional emergency fallback. This image does not make a Python-only hosting plan support .NET.

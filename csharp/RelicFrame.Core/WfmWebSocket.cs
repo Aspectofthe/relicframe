@@ -9,13 +9,15 @@ public sealed class WfmWebSocket
     public const string Url = "wss://ws.warframe.market/socket";
     public const string Protocol = "wfm";
     private readonly IReadOnlyDictionary<string, string> idToSlug;
-    private readonly ISet<string> tracked;
+    private readonly Func<string, bool> tracked;
     private readonly Action<string, JsonElement> apply;
     private int connected;
     private long lastEventTicks;
     public bool Connected => Volatile.Read(ref connected) != 0;
     public DateTimeOffset? LastEventAt => Interlocked.Read(ref lastEventTicks) is var ticks && ticks > 0 ? new(ticks, TimeSpan.Zero) : null;
     public WfmWebSocket(IReadOnlyDictionary<string, string> idToSlug, ISet<string> tracked, Action<string, JsonElement> apply)
+        : this(idToSlug, tracked.Contains, apply) { }
+    public WfmWebSocket(IReadOnlyDictionary<string, string> idToSlug, Func<string, bool> tracked, Action<string, JsonElement> apply)
     { this.idToSlug = idToSlug; this.tracked = tracked; this.apply = apply; }
 
     public bool Handle(string raw)
@@ -25,7 +27,7 @@ public sealed class WfmWebSocket
             using var doc = JsonDocument.Parse(raw); var message = doc.RootElement; var route = message.Get("route").Text();
             if (!route.Contains("neworder", StringComparison.OrdinalIgnoreCase)) return false;
             var payload = message.Get("payload"); var order = payload.Get("order").ValueKind == JsonValueKind.Object ? payload.Get("order") : payload;
-            var itemId = order.Get("itemId").Text(); if (!idToSlug.TryGetValue(itemId, out var slug) || !tracked.Contains(slug)) return false;
+            var itemId = order.Get("itemId").Text(); if (!idToSlug.TryGetValue(itemId, out var slug) || !tracked(slug)) return false;
             apply(slug, order); Interlocked.Exchange(ref lastEventTicks, DateTimeOffset.UtcNow.UtcTicks); return true;
         }
         catch (JsonException) { return false; }

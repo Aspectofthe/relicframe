@@ -10,10 +10,9 @@ WORKDIR /app
 COPY --from=build /out/ ./
 COPY relicframe/data/relics_from_official_data.csv ./relicframe/data/relics_from_official_data.csv
 COPY relicframe/data/rivens/attributes.json relicframe/data/rivens/roll_rules.json relicframe/data/rivens/weapon_variants.json relicframe/data/rivens/weapons.json ./relicframe/data/rivens/
-COPY Untitled.txt ./Untitled.txt
 ENV RELICFRAME_DATA_DIR=/app/relicframe/data \
     RELICFRAME_RUNTIME_DIR=/data \
-    ARBITRATION_SCHEDULE_PATH=/app/Untitled.txt \
+    ARBITRATION_SCHEDULE_PATH=/data/arbitration_schedule.txt \
     DOTNET_GCConserveMemory=7 \
     DOTNET_EnableDiagnostics=0
 VOLUME ["/data"]
