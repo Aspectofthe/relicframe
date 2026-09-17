@@ -45,9 +45,16 @@ internal sealed class RivenLocalOcr : IDisposable
         {
             engine ??= CreateEngine();
             using var original = PixImage.LoadFromMemory(bytes);
-            if (Math.Max(original.Width, original.Height) < 220 || Math.Min(original.Width, original.Height) < 80)
-                throw new ArgumentException("That image is too small for reliable Riven text recognition. Upload the original screenshot or a clearer crop.");
-            var scale = Math.Clamp(2200f / Math.Max(original.Width, original.Height), 1.25f, 3f);
+            // Small card crops can still contain legible text. Give them enough pixels
+            // for Tesseract instead of rejecting them solely because Discord compressed
+            // the attachment. Bound the normalized pixel area rather than imposing an
+            // arbitrary input resolution, so tiny crops and large screenshots use the
+            // same recognition path without unbounded decoded memory.
+            var sourcePixels = Math.Max(1d, (double)original.Width * original.Height);
+            var targetScale = 2200d / Math.Max(1, Math.Max(original.Width, original.Height));
+            var areaScale = Math.Sqrt(12_000_000d / sourcePixels);
+            var maximumScale = Math.Max(original.Width, original.Height) < 220 ? 12d : 3d;
+            var scale = (float)Math.Clamp(Math.Min(targetScale, areaScale), 1.0, maximumScale);
             using var enlarged = original.Scale(scale, scale);
             using var gray = enlarged.Depth >= 24 ? enlarged.ConvertRGBToGray() : enlarged.Clone();
             using var purple = enlarged.Depth >= 24 ? enlarged.ConvertRGBToGray(.45f, .10f, .45f) : enlarged.Clone();

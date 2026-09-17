@@ -536,6 +536,19 @@ var retryHandler = new RetryHandler();
     ], ["Soma"]);
     Assert(iconNoiseOcr.Positives.Select(stat => stat.Name).ToHashSet(StringComparer.Ordinal).SetEquals(["cold_damage", "status_chance"]),
         "Riven OCR ignores emoji/icon text inserted between percentages and stat labels: " + string.Join(",", iconNoiseOcr.Positives.Select(stat => stat.Name)));
+    var duplicatedIconOcr = RivenOcrText.Parse([
+        ("Despair Hera-insinok\n+13.9 Puncture\n+9.4 Zoom\n+0.3 Punch Through\nMR 16 rerolls 64", .86f),
+        ("Despair Hera-insinok\n+13.9 Puncture\n+9 Electricity\n+0.3 Punch Through\nMR 16 rerolls 64", .72f)
+    ], ["Despair"]);
+    Assert(duplicatedIconOcr.Positives.Select(stat => stat.Name).ToHashSet(StringComparer.Ordinal)
+            .SetEquals(["puncture_damage", "zoom", "punch_through"]) && duplicatedIconOcr.Negative is null,
+        "an elemental-icon misread at the same value and card position cannot fabricate a fourth negative stat");
+    var capacityGlyphOcr = RivenOcrText.Parse([
+        ("Dera ???\n18V\n+100% Weakpoint Damage\n+103.9% Zoom\n+100% Wea\n???\nMR 12", .72f)
+    ], ["Dera"]);
+    Assert(capacityGlyphOcr.Positives.Select(stat => stat.Name).ToHashSet(StringComparer.Ordinal)
+            .SetEquals(["weak_point_damage", "zoom"]) && capacityGlyphOcr.Negative is null,
+        "a short capacity/polarity glyph cannot fuzzy-match a combined elemental stat");
     var combinedOcr = RivenOcrText.Parse([
         ("Soma\n+96.5% ☣ Viral Damage\n+71.2% Status Damage\nMR 12 rerolls 3", .84f)
     ], ["Soma"]);

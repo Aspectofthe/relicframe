@@ -83,7 +83,7 @@ public static partial class RivenOcrText
                 .Concat(RivenPricing.AllowedStats("rifle", false)).Concat(RivenPricing.AllowedStats("melee", false))
                 .Distinct(StringComparer.Ordinal).Select(slug => (Slug: slug, Name: RivenPricing.DisplayName(slug), Score: Math.Max(StatLabelScore(rawName, slug), StatLabelScore(fullTail, slug))))
                 .OrderByDescending(stat => stat.Score).First();
-            if (best.Score < .48 || !PlausibleValue(best.Slug, value)) continue;
+            if (best.Score < .62 || !PlausibleValue(best.Slug, value)) continue;
             var sign = match.Groups["sign"].Value;
             candidates.Add(new(best.Slug, value, sign is "-" or "−" or "–" or "—" || multiplier && value < 0,
                 best.Score * .75 + line.Confidence * .25, line.Pass, line.Position));
@@ -103,6 +103,19 @@ public static partial class RivenOcrText
                 matching.Average(item => item.Score) + Math.Min(.12, (perPass.Length - 1) * .025) + agreement * .04,
                 perPass.Length, matching.Average(item => item.Position));
         }).OrderByDescending(item => item.Score).ThenByDescending(item => item.Support).ToArray();
+        // Different OCR passes can interpret an elemental icon as a second label on
+        // the same physical value. Keep the clearly stronger reading, and when the
+        // card produces more than three candidates prefer corroborated or cleanly
+        // matched labels over one-pass texture/capacity hallucinations.
+        resolved = resolved.Where(item => !resolved.Any(other => other != item
+                && Math.Abs(other.Position - item.Position) <= .06
+                && Math.Abs(Math.Abs(other.Value) - Math.Abs(item.Value)) <= Math.Max(.6, Math.Abs(item.Value) * .03)
+                && other.Score > item.Score + .08)).ToArray();
+        if (resolved.Length > 3)
+        {
+            var reliable = resolved.Where(item => item.Support >= 2 || item.Score >= .92).ToArray();
+            if (reliable.Length >= 2) resolved = reliable;
+        }
         // A generated Riven name encodes its positive attributes. Prefer those labels when
         // icon glyphs or the purple card texture make a stat line look like another attribute.
         var titleGuided = titleStats.Length is 2 or 3 && titleStats.Any(slug => resolved.Any(item => item.Slug == slug && !item.Negative));
@@ -138,7 +151,8 @@ public static partial class RivenOcrText
                     consumed.Add(replacement); titleCorrected = true;
                 }
             }
-            var negatives = resolved.Where(item => item.Negative && ConsistentImpliedNegative(item, guidedPositives, titleStats.Length))
+            var negatives = resolved.Where(item => item.Negative && !DuplicatesGuidedLine(item, guidedPositives)
+                    && ConsistentImpliedNegative(item, guidedPositives, titleStats.Length))
                 .OrderByDescending(item => item.Support).ThenByDescending(item => item.Score).Take(1).ToList();
             if (negatives.Count == 0)
             {
@@ -147,6 +161,7 @@ public static partial class RivenOcrText
                 // +Weapon Recoil is displayed with a plus sign).
                 var implied = resolved.Where(item => !item.Negative && !consumed.Contains(item)
                         && !titleStats.Contains(item.Slug, StringComparer.Ordinal)
+                        && !DuplicatesGuidedLine(item, guidedPositives)
                         && ConsistentImpliedNegative(item, guidedPositives, titleStats.Length))
                     .OrderByDescending(item => item.Position).ThenByDescending(item => item.Support).FirstOrDefault();
                 if (implied is not null && resolved.Count(item => !item.Negative) >= titleStats.Length + 1)
@@ -236,6 +251,9 @@ public static partial class RivenOcrText
         }
         return false;
     }
+    private static bool DuplicatesGuidedLine(ResolvedCandidate candidate, IReadOnlyList<ResolvedCandidate> guided)
+        => guided.Any(item => Math.Abs(item.Position - candidate.Position) <= .06
+            && Math.Abs(Math.Abs(item.Value) - Math.Abs(candidate.Value)) <= Math.Max(.6, Math.Abs(item.Value) * .03));
     private static ResolvedCandidate? RecoverSignedValue(string slug,
         IEnumerable<(string Text, float Confidence, int Pass, double Position)> lines, IReadOnlyList<ResolvedCandidate> resolved)
     {
@@ -356,9 +374,14 @@ public static partial class RivenOcrText
     private static double StatLabelScore(string raw, string slug)
     {
         var rawKey = Key(raw);
+        // Polarity/capacity fragments and truncated words are not stat labels. Exact
+        // short names such as Gas remain valid, but "V" must not become Viral and
+        // "Wea" must not become Weapon Recoil through substring scoring.
+        if (rawKey.Length == 0) return 0;
         return OcrNames(slug).Select(name => Key(name)).Where(name => name.Length > 0).Select(name =>
         {
             if (rawKey == name) return 1.2;
+            if (rawKey.Length < 4) return 0;
             if (rawKey.EndsWith(name, StringComparison.Ordinal)) return 1.12;
             if (rawKey.Contains(name, StringComparison.Ordinal)) return 1.05;
             var suffix = rawKey.Length > name.Length + 4 ? rawKey[^Math.Min(rawKey.Length, name.Length + 4)..] : rawKey;
