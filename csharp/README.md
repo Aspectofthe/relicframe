@@ -79,6 +79,7 @@ For direct screenshot posts, enable **Developer Portal → Bot → Privileged Ga
 | `RELICFRAME_WFM_USER_SLUG` | Your Warframe.market profile slug, used only to exclude your own listing from price comparison |
 | `RELICFRAME_WFM_TOKEN` | Optional Warframe.market JWT for Personal Market account writes; keep it in host secrets |
 | `RELICFRAME_WFM_TOKEN_FILE` | Optional path to a local Warframe.market JWT file; Linux default is `csharp/runtime/wfm-token.txt` |
+| `RELICFRAME_ALECA_PUBLIC_TOKEN_FILE` | Optional path to an AlecaFrame public token with **Trades** access; default `csharp/runtime/aleca-public-token.txt` |
 | `RELICFRAME_PERSONAL_AUTO_PUBLISH` | Optional `true`/`false` first-run override for authenticated automatic listing; the channel Pause button persists afterward |
 
 The same non-secret identifiers and defaults can be kept in the ignored local file `csharp/runtime/personal_market_settings.json`. Environment variables override that file. Never put an email, password, session cookie or access token in it.
@@ -95,6 +96,8 @@ For a private parser diagnostic that prints counts but never item names, run `do
 ```
 
 Names must match Warframe.market. The inventory file remains local; only eligible item names, quantities, current asks, listing prices, and the latest tracked managed-order sales appear in the owner-only channel. Account sync creates or updates visible sell orders, caps each pass at 25 writes, and deletes managed orders only when the item is no longer owned. A managed order's confirmed quantity reduction is written to the persistent local sale history; disappearance alone is reported but does not erase inventory or fabricate a sale. A raw AlecaFrame inventory decrease by itself also never proves a sale.
+
+For immediate completed-trade removal, open AlecaFrame's **Stats** tab, create a public link with only **Trades** selected, and place the generated token in the ignored local file `csharp/runtime/aleca-public-token.txt` (or set `RELICFRAME_ALECA_PUBLIC_TOKEN_FILE`). RelicFrame polls AlecaFrame's documented Stats API every 30 seconds, baselines existing history on first connection, and records each later sale by a stable event fingerprint. Sold parts are deducted from the stale inventory cache immediately; sold sets deduct every required component. The managed Warframe.market order is then reduced or deleted before it can be uploaded again. A later order reduction or AlecaFrame inventory refresh confirms the same sale without deducting it twice. This works identically on Windows and Linux, never logs the token, and uses one request per poll—well below AlecaFrame's documented one-request-per-second limit. Revoking the public link disables access.
 
 Do not point the runtime directory at Python's working directory or private export directories. The C# preview does not load `.env`, register global commands, delete Python commands, migrate production role/channel IDs or automatically start scans.
 

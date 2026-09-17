@@ -187,6 +187,20 @@ try
         "Personal Market reads AlecaFrame rows without optional display names and normalizes them safely");
 }
 finally { File.Delete(alecaFixture); }
+using (var tradeHistoryFixture = JsonDocument.Parse("""
+    {"trades":[
+      {"ts":"2026-09-17T12:00:00Z","tx":[{"name":"/Lotus/TestPrimeReceiver","displayName":"Test Prime Receiver","cnt":2,"rank":0}],"rx":[],"type":0,"totalPlat":40},
+      {"ts":"2026-09-17T12:01:00Z","tx":[],"rx":[{"name":"/Lotus/TestPrimeBlueprint","displayName":"Test Prime Blueprint","cnt":1,"rank":0}],"type":1,"totalPlat":10}
+    ]}
+    """))
+{
+    var trades = AlecaTradeHistory.Parse(tradeHistoryFixture.RootElement);
+    Assert(trades.Count == 2 && trades[0].IsSale && !trades[1].IsSale && trades[0].Sent is [{ DisplayName: "Test Prime Receiver", Quantity: 2 }],
+        "AlecaFrame trade history identifies completed outgoing sales and their exact item quantities");
+    var repeated = AlecaTradeHistory.Parse(tradeHistoryFixture.RootElement);
+    Assert(trades.Select(row => row.Id).SequenceEqual(repeated.Select(row => row.Id)),
+        "AlecaFrame completed trades receive stable identifiers so the same sale cannot be deducted twice");
+}
 using (var profileDocument = JsonDocument.Parse(File.ReadAllText("relicframe/data/rivens/roll_rules.json")))
 {
     var profiles = profileDocument.RootElement.Get("rows").Rows().ToArray();

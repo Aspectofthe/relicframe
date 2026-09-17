@@ -18,6 +18,9 @@ internal sealed record PersonalMarketState
     public Dictionary<string, int> ManagedOrderQuantities { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> ManagedOrderPrices { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> PendingSoldQuantities { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, int> UnmatchedAlecaSaleQuantities { get; set; } = new(StringComparer.Ordinal);
+    public DateTimeOffset? AlecaTradeWatermark { get; set; }
+    public string[] ProcessedAlecaTradeIds { get; set; } = [];
     public PersonalMarketSale[] SaleHistory { get; set; } = [];
     public string[] LastActions { get; set; } = [];
     public DateTimeOffset? LastAccountSync { get; set; }
@@ -38,9 +41,11 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
     private const int PageSize = 12;
     private readonly DiscordSocketClient bot;
     private readonly LiveMarket market;
+    private readonly MarketHttp http;
     private readonly ulong targetGuild;
     private readonly ulong configuredOwner;
     private readonly string inventoryPath;
+    private readonly string alecaPublicTokenPath;
     private readonly string statePath;
     private readonly int minimumPrice;
     private readonly int undercut;
@@ -60,7 +65,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
 
     public PersonalMarketManager(DiscordSocketClient bot, LiveMarket market, MarketHttp http, ulong targetGuild, string runtime)
     {
-        this.bot = bot; this.market = market; this.targetGuild = targetGuild;
+        this.bot = bot; this.market = market; this.http = http; this.targetGuild = targetGuild;
         var settingsPath = Path.Combine(runtime, "personal_market_settings.json");
         PersonalMarketSettings settings;
         try { settings = File.Exists(settingsPath) ? Json.Read<PersonalMarketSettings>(settingsPath) : new(); }
@@ -71,6 +76,9 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         var alecaInventory = OperatingSystem.IsWindows() && !string.IsNullOrWhiteSpace(localData)
             ? Path.Combine(localData, "AlecaFrame", "lastData.dat") : "";
         inventoryPath = Path.GetFullPath(!string.IsNullOrWhiteSpace(configuredInventory) ? configuredInventory : !string.IsNullOrWhiteSpace(settings.InventoryJson) ? settings.InventoryJson : File.Exists(alecaInventory) ? alecaInventory : Path.Combine(runtime, "prime_inventory.json"));
+        var configuredAlecaTokenPath = Environment.GetEnvironmentVariable("RELICFRAME_ALECA_PUBLIC_TOKEN_FILE");
+        alecaPublicTokenPath = Path.GetFullPath(!string.IsNullOrWhiteSpace(configuredAlecaTokenPath)
+            ? configuredAlecaTokenPath : Path.Combine(runtime, "aleca-public-token.txt"));
         statePath = Path.Combine(runtime, "personal_market.json");
         minimumPrice = int.TryParse(Environment.GetEnvironmentVariable("RELICFRAME_PERSONAL_MIN_PLAT"), out var min) ? Math.Clamp(min, 1, 900000) : Math.Clamp(settings.MinimumPlat, 1, 900000);
         undercut = int.TryParse(Environment.GetEnvironmentVariable("RELICFRAME_PERSONAL_UNDERCUT"), out var cut) ? Math.Clamp(cut, 1, 3) : Math.Clamp(settings.Undercut, 1, 3);
@@ -86,6 +94,8 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         state.ManagedOrderIds ??= new(StringComparer.Ordinal); state.LastInventory ??= new(StringComparer.OrdinalIgnoreCase);
         state.ManagedOrderQuantities ??= new(StringComparer.Ordinal); state.ManagedOrderPrices ??= new(StringComparer.Ordinal);
         state.PendingSoldQuantities ??= new(StringComparer.Ordinal);
+        state.UnmatchedAlecaSaleQuantities ??= new(StringComparer.Ordinal);
+        state.ProcessedAlecaTradeIds ??= [];
         state.SaleHistory ??= []; state.LastActions ??= [];
         if (state.ReconciliationVersion < 2)
         {
@@ -165,7 +175,8 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 try { await UpdateAsync(force: false, ct); }
                 catch (Exception e) when (!ct.IsCancellationRequested && e is not OutOfMemoryException)
                 { status = $"refresh failed ({e.GetType().Name}); previous board retained"; Console.WriteLine($"[personal-market] {e}"); }
-                var delay = market.ReadyBooks == 0 || market.IsBootstrapping || reconciliationPending ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5);
+                var delay = market.ReadyBooks == 0 || market.IsBootstrapping || reconciliationPending || File.Exists(alecaPublicTokenPath)
+                    ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5);
                 await Task.Delay(delay, ct);
             }
         }
@@ -221,6 +232,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             }
             setDefinitions = definitions;
         }
+        sourceActions.AddRange(await ObserveAlecaTradesAsync(rawInventory, ct));
         IReadOnlyList<WfmOwnOrder>? orders = null;
         var marketUsable = market.ReadyBooks > 0 && !market.IsBootstrapping;
         if (marketUsable && (state.AutoPublishEnabled == true || state.ManagedOrderIds.Count > 0))
@@ -300,7 +312,8 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             description += "\n\n**Recent tracked sales**\n" + string.Join('\n', state.SaleHistory.Take(3).Select(sale =>
                 $"• **{sale.ItemName}** ×{sale.Quantity}{(sale.PlatinumEach > 0 ? $" at {sale.PlatinumEach}p each" : "")} · <t:{sale.DetectedAt.ToUnixTimeSeconds()}:R>"));
         var pendingSold = state.PendingSoldQuantities.Values.Sum(value => Math.Max(0, value));
-        description += $"\nManaged Warframe.market order reductions/closures are tracked as sold; AlecaFrame inventory changes alone are not. Pending stale-cache deduction: **{pendingSold}** item(s).";
+        var alecaTradeMode = File.Exists(alecaPublicTokenPath) ? "completed-trade feed connected" : $"not connected; add a trades-only public token at `{alecaPublicTokenPath}`";
+        description += $"\nAlecaFrame {alecaTradeMode}. Completed sales and managed Warframe.market quantity reductions remove stale stock immediately. Pending stale-cache deduction: **{pendingSold}** item(s).";
         var embed = new EmbedBuilder().WithTitle("Personal Prime Market · automatic listings").WithDescription(description.Length <= 4096 ? description : description[..4093] + "…")
             .WithColor(new Color(state.AutoPublishEnabled == true ? 0x2ECC71u : 0xF39C12u)).WithFooter($"Page {state.Page}/{pages} · {quotes.Length} eligible items · authenticated sync {(state.LastAccountSync.HasValue ? state.LastAccountSync.Value.ToString("u") : "never")}").Build();
         var components = new ComponentBuilder()
@@ -393,10 +406,90 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         return string.IsNullOrWhiteSpace(name) ? null : market.ItemIdForName(name);
     }
 
+    private async Task<IReadOnlyList<string>> ObserveAlecaTradesAsync(IReadOnlyList<PrimeInventoryEntry> rawInventory, CancellationToken ct)
+    {
+        if (!File.Exists(alecaPublicTokenPath)) return [];
+        string token;
+        try { token = (await File.ReadAllTextAsync(alecaPublicTokenPath, ct)).Trim(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Console.WriteLine($"[personal-market] AlecaFrame public-token file unavailable ({error.GetType().Name}).");
+            return ["• AlecaFrame completed-trade feed is unavailable; its public-token file could not be read."];
+        }
+        if (token.Length is < 8 or > 2048)
+            return ["• AlecaFrame completed-trade feed is disabled because its public-token file is empty or invalid."];
+
+        IReadOnlyList<AlecaCompletedTrade> trades;
+        try
+        {
+            using var payload = await http.GetJsonAsync(
+                $"https://stats.alecaframe.com/api/stats/public?token={Uri.EscapeDataString(token)}", ct, lowPriority: true);
+            trades = AlecaTradeHistory.Parse(payload.RootElement);
+        }
+        catch (Exception error) when (!ct.IsCancellationRequested && error is not OutOfMemoryException)
+        {
+            Console.WriteLine($"[personal-market] AlecaFrame completed-trade feed failed ({error.GetType().Name}); no inventory changes were made.");
+            return ["• AlecaFrame completed-trade feed could not be checked; no inventory was deducted."];
+        }
+        if (trades.Count == 0) return [];
+
+        var processed = state.ProcessedAlecaTradeIds.ToHashSet(StringComparer.Ordinal);
+        if (!state.AlecaTradeWatermark.HasValue)
+        {
+            var latest = trades.Max(row => row.Timestamp);
+            state.AlecaTradeWatermark = latest;
+            state.ProcessedAlecaTradeIds = trades.Where(row => row.Timestamp == latest).Select(row => row.Id).Distinct(StringComparer.Ordinal).TakeLast(1000).ToArray();
+            Save();
+            return ["• AlecaFrame completed-trade feed connected; existing history was baselined without changing inventory."];
+        }
+
+        var ownedIds = rawInventory.Select(ItemIdForInventory).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        var actions = new List<string>();
+        var observedNew = false;
+        foreach (var trade in trades.Where(row => row.Timestamp >= state.AlecaTradeWatermark.Value && !processed.Contains(row.Id)))
+        {
+            observedNew = true;
+            processed.Add(trade.Id);
+            if (trade.Timestamp > state.AlecaTradeWatermark) state.AlecaTradeWatermark = trade.Timestamp;
+            if (!trade.IsSale) continue;
+            var mapped = trade.Sent.Select(item => new
+            {
+                Item = item,
+                Name = item.DisplayName.Length > 0 ? item.DisplayName : market.NameForGameRef(item.Name) ?? item.Name,
+                ItemId = market.ItemIdForName(item.DisplayName.Length > 0 ? item.DisplayName : market.NameForGameRef(item.Name) ?? item.Name)
+            }).Where(row => row.ItemId is not null && (ownedIds.Contains(row.ItemId) || state.ManagedOrderIds.ContainsKey(row.ItemId) ||
+                setDefinitions.Any(set => set.SetItemId == row.ItemId))).ToArray();
+            foreach (var sold in mapped)
+            {
+                AddPendingSale(sold.ItemId!, sold.Item.Quantity);
+                state.UnmatchedAlecaSaleQuantities[sold.ItemId!] = state.UnmatchedAlecaSaleQuantities.GetValueOrDefault(sold.ItemId!) + sold.Item.Quantity;
+                var priceEach = mapped.Length == 1 ? Math.Max(0, trade.TotalPlatinum / sold.Item.Quantity) : 0;
+                state.SaleHistory = state.SaleHistory.Append(new(sold.ItemId!, sold.Name, "alecaframe:" + trade.Id[..12],
+                    sold.Item.Quantity, priceEach, trade.Timestamp)).OrderByDescending(row => row.DetectedAt).Take(100).ToArray();
+                actions.Add($"• AlecaFrame completed sale: removed **{sold.Name}** ×{sold.Item.Quantity} from available inventory immediately.");
+            }
+        }
+        state.ProcessedAlecaTradeIds = trades.Where(row => row.Timestamp == state.AlecaTradeWatermark && processed.Contains(row.Id))
+            .Select(row => row.Id).Distinct(StringComparer.Ordinal).Take(1000).ToArray();
+        if (observedNew) Save();
+        return actions;
+    }
+
+    private void AddPendingSale(string itemId, int quantity)
+    {
+        if (quantity <= 0) return;
+        var soldSet = setDefinitions.FirstOrDefault(set => set.SetItemId == itemId);
+        if (soldSet is null)
+            state.PendingSoldQuantities[itemId] = state.PendingSoldQuantities.GetValueOrDefault(itemId) + quantity;
+        else foreach (var part in soldSet.Components)
+            state.PendingSoldQuantities[part.ItemId] = state.PendingSoldQuantities.GetValueOrDefault(part.ItemId) + quantity * part.Quantity;
+    }
+
     private List<string> ReconcileAlecaSnapshot(IReadOnlyList<PrimeInventoryEntry> rawInventory)
     {
         var actions = new List<string>();
         var current = rawInventory.ToDictionary(row => row.GameRef, row => row.Quantity, StringComparer.OrdinalIgnoreCase);
+        var decreasesByItemId = new Dictionary<string, int>(StringComparer.Ordinal);
         if (state.LastInventory.Count > 0)
         {
             foreach (var previous in state.LastInventory)
@@ -406,11 +499,23 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 var row = rawInventory.FirstOrDefault(item => item.GameRef.Equals(previous.Key, StringComparison.OrdinalIgnoreCase))
                     ?? new PrimeInventoryEntry(previous.Key, 0);
                 var itemId = ItemIdForInventory(row);
-                if (itemId is null || !state.PendingSoldQuantities.TryGetValue(itemId, out var pending) || pending <= 0) continue;
+                if (itemId is null) continue;
+                decreasesByItemId[itemId] = decreasesByItemId.GetValueOrDefault(itemId) + decrease;
+                if (!state.PendingSoldQuantities.TryGetValue(itemId, out var pending) || pending <= 0) continue;
                 var cleared = Math.Min(pending, decrease);
                 if (cleared >= pending) state.PendingSoldQuantities.Remove(itemId);
                 else state.PendingSoldQuantities[itemId] = pending - cleared;
                 actions.Add($"• AlecaFrame refreshed; cleared {cleared} stale sold-item deduction for **{market.NameForItemId(itemId) ?? "Prime item"}**.");
+            }
+            foreach (var pendingAleca in state.UnmatchedAlecaSaleQuantities.ToArray())
+            {
+                var soldSet = setDefinitions.FirstOrDefault(set => set.SetItemId == pendingAleca.Key);
+                var confirmed = soldSet is null
+                    ? decreasesByItemId.GetValueOrDefault(pendingAleca.Key)
+                    : soldSet.Components.Min(part => decreasesByItemId.GetValueOrDefault(part.ItemId) / Math.Max(1, part.Quantity));
+                if (confirmed <= 0) continue;
+                if (confirmed >= pendingAleca.Value) state.UnmatchedAlecaSaleQuantities.Remove(pendingAleca.Key);
+                else state.UnmatchedAlecaSaleQuantities[pendingAleca.Key] = pendingAleca.Value - confirmed;
             }
         }
         state.LastInventory = current;
@@ -447,16 +552,24 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             var sold = Math.Max(0, previous - remaining);
             if (sold > 0)
             {
-                var soldSet = setDefinitions.FirstOrDefault(set => set.SetItemId == managed.Key);
-                if (soldSet is null)
-                    state.PendingSoldQuantities[managed.Key] = state.PendingSoldQuantities.GetValueOrDefault(managed.Key) + sold;
-                else foreach (var part in soldSet.Components)
-                    state.PendingSoldQuantities[part.ItemId] = state.PendingSoldQuantities.GetValueOrDefault(part.ItemId) + sold * part.Quantity;
                 var name = market.NameForItemId(managed.Key) ?? "Prime item";
-                var price = state.ManagedOrderPrices.GetValueOrDefault(managed.Key, current!.Platinum);
-                var sale = new PersonalMarketSale(managed.Key, name, managed.Value, sold, price, DateTimeOffset.UtcNow);
-                state.SaleHistory = state.SaleHistory.Append(sale).OrderByDescending(row => row.DetectedAt).Take(100).ToArray();
-                actions.Add($"• Tracked **{name}** ×{sold} as sold from its managed market-order quantity reduction; stale AlecaFrame inventory is suppressed.");
+                var alreadyTracked = Math.Min(sold, Math.Max(0, state.UnmatchedAlecaSaleQuantities.GetValueOrDefault(managed.Key)));
+                if (alreadyTracked > 0)
+                {
+                    var unmatched = state.UnmatchedAlecaSaleQuantities[managed.Key] - alreadyTracked;
+                    if (unmatched == 0) state.UnmatchedAlecaSaleQuantities.Remove(managed.Key);
+                    else state.UnmatchedAlecaSaleQuantities[managed.Key] = unmatched;
+                    actions.Add($"• Warframe.market confirmed AlecaFrame's tracked sale of **{name}** ×{alreadyTracked}; no second deduction was made.");
+                }
+                var newlyObserved = sold - alreadyTracked;
+                if (newlyObserved > 0)
+                {
+                    AddPendingSale(managed.Key, newlyObserved);
+                    var price = state.ManagedOrderPrices.GetValueOrDefault(managed.Key, current!.Platinum);
+                    var sale = new PersonalMarketSale(managed.Key, name, managed.Value, newlyObserved, price, DateTimeOffset.UtcNow);
+                    state.SaleHistory = state.SaleHistory.Append(sale).OrderByDescending(row => row.DetectedAt).Take(100).ToArray();
+                    actions.Add($"• Tracked **{name}** ×{newlyObserved} as sold from its managed market-order quantity reduction; stale AlecaFrame inventory is suppressed.");
+                }
             }
             state.ManagedOrderQuantities[managed.Key] = current!.Quantity; state.ManagedOrderPrices[managed.Key] = current.Platinum;
         }
