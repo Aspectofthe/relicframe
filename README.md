@@ -30,7 +30,7 @@ See [relicframe/README.md](relicframe/README.md) for commands, permissions, diag
 
 Install the .NET 10 SDK, then run from the repository root:
 
-Windows: run `.\csharp\run-bot.cmd`. Linux: run `chmod +x csharp/run-bot.sh && ./csharp/run-bot.sh`. Both launchers build Release, securely prompt for the Discord token and server ID on first use, and start the bot. See [csharp/README.md](csharp/README.md) for environment variables, Linux OCR/Proton integration, Docker, commands, and deployment notes.
+Windows: run `.\csharp\run-bot.cmd`. Linux: run `chmod +x csharp/run-bot.sh && ./csharp/run-bot.sh`. Both launchers build Release, securely prompt for the Discord token and server ID on first use, and start the bot. Follow the complete [bot setup guide](csharp/SETUP_GUIDE.md) for creating the Discord application, permissions, first launch and verification. See [csharp/README.md](csharp/README.md) for environment variables, Linux OCR/Proton integration, Docker, commands, and deployment notes.
 
 The C# test bot also creates an owner-only Personal Market board. With explicit local authorization it can reuse AlecaFrame's local JWT to create/update bounded Prime sell listings while enforcing a price floor and owner-only emergency pause. Credentials are never printed or committed; automatic trading remains a Warframe.market grey area.
 

@@ -792,6 +792,8 @@ var retryHandler = new RetryHandler();
         var guide = WorldRender.Build("bot-guide", snapshot, schedule);
         var guideLength = guide.Sum(board => board.Title.Length + board.Description.Length);
         Assert(guideLength <= 6000, $"complete replacement guide fits Discord's combined embed text limit ({guideLength})");
+        Assert(guide.Any(board => board.Title == "RelicFrame — complete starting guide" && board.Description.Contains("run-bot.cmd") && board.Description.Contains("Message Content Intent") && board.Description.Contains("No Oracle/server is needed")),
+            "Discord guide includes local Windows/Linux installation and leaves Oracle optional");
         var signatures = WorldRender.Signatures(snapshot, schedule);
         Assert(signatures["cascade"].SequenceEqual(["normal"]) && signatures["steel_cascade"].SequenceEqual(["steel"]) && signatures["void_storm_neo"].SequenceEqual(["storm"]), "separate cascade and fissure-tier signatures");
         using var empty = JsonDocument.Parse("{\"fissures\":[]}"); var stale = snapshot with { Stale = true, World = empty.RootElement };

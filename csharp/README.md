@@ -53,6 +53,8 @@ No arguments prints the preview notice and exits without connecting to anything.
 
 ## Optional test-guild run
 
+For a clean installation, follow [SETUP_GUIDE.md](SETUP_GUIDE.md). It covers creating and inviting the Discord application, required permissions and Message Content Intent, obtaining the server ID, Windows and Linux launchers, first-run commands, optional Personal Market configuration, and troubleshooting. Oracle hosting and shared caching are future optional deployment work and are not required by the current bot.
+
 Use a **separate Discord test application** and a disposable test server. Do not run two deployments using the production token. Set these variables through the host's secret/environment settings; never commit their values or paste them into chat:
 
 For direct screenshot posts, enable **Developer Portal → Bot → Privileged Gateway Intents → Message Content Intent**. Discord hides ordinary guild-message attachments from bots without that intent. The handler still ignores message text and every channel except the configured `#riven-appraisal` channel.
