@@ -15,6 +15,7 @@ internal sealed record PrimeVendorBoardState
     public string BaroHash { get; set; } = "";
     public DateTimeOffset? AyaExpiresAt { get; set; }
     public DateTimeOffset? BaroExpiresAt { get; set; }
+    public string AyaSort { get; set; } = AyaProfit.Overall;
 }
 internal sealed record BaroSaleCache(DateTimeOffset CheckedAt, HistoricalSaleSummary Sales,
     HistoricalSaleSummary? PostVisit = null, DateTimeOffset? VisitEndedAt = null);
@@ -39,6 +40,8 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
     private List<BaroVisitRecord> visits;
     private CancellationTokenSource? cancellation;
     private Task? worker;
+    private PrimeVendorSnapshot? latestAyaSnapshot;
+    private AyaValueRow[] latestAyaRows = [];
     private string status = "stopped";
     public string Status => Volatile.Read(ref status);
 
@@ -56,6 +59,7 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
         try { visits = File.Exists(visitsPath) ? Json.Read<List<BaroVisitRecord>>(visitsPath) : []; }
         catch (Exception error) when (error is IOException or System.Text.Json.JsonException) { visits = []; }
         official.DefaultRequestHeaders.UserAgent.ParseAdd("RelicFrame-CSharp/0.1");
+        bot.ButtonExecuted += DispatchButtonAsync;
     }
 
     public async Task<string> SetupAsync(SocketGuild guild, CancellationToken ct, CancellationToken lifetime)
@@ -141,8 +145,12 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
 
     private async Task<string> AyaTextAsync(PrimeVendorSnapshot snapshot, CancellationToken ct)
     {
-        if (snapshot.Aya is not { } rotation) return "Varzia's active rotation is unavailable in the official feed. No old rotation is being presented as current.";
-        var rows = new List<(string Name, int Aya, double? Sell, double? Open, double? Rare)>();
+        if (snapshot.Aya is not { } rotation)
+        {
+            latestAyaSnapshot = snapshot; latestAyaRows = [];
+            return "Varzia's active rotation is unavailable in the official feed. No old rotation is being presented as current.";
+        }
+        var rows = new List<AyaValueRow>();
         foreach (var offer in rotation.Offers)
         {
             var key = offer.Name.EndsWith(" Relic", StringComparison.OrdinalIgnoreCase) ? offer.Name[..^6] : offer.Name;
@@ -150,28 +158,89 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
             if (!market.IsBookFresh(offer.Name, TimeSpan.FromMinutes(30))) await market.EnsureBookAsync(offer.Name, ct);
             var direct = market.IsBookFresh(offer.Name, TimeSpan.FromMinutes(30)) ? market.Match(offer.Name, "intact", true, relic: true) : new OrderMatch([], false);
             double? sell = direct.SubtypeMatched ? direct.Best?.Price : null;
-            double? open = null; double? rare = null;
-            if (relic is not null && relic.Rewards.All(reward => market.IsBookFresh(reward.RewardName, TimeSpan.FromMinutes(30))))
+            double? open = null; double? rare = null; string? bestPart = null; double? bestPartAsk = null;
+            var primeRewards = relic?.Rewards.Where(reward => reward.RewardName.Contains(" Prime ", StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
+            if (relic is not null && primeRewards.Length > 0 && primeRewards.All(reward => market.IsBookFresh(reward.RewardName, TimeSpan.FromMinutes(30))))
             {
-                var prices = relic.Rewards.ToDictionary(reward => reward.RewardName.ToLowerInvariant(),
+                var prices = primeRewards.ToDictionary(reward => reward.RewardName.ToLowerInvariant(),
                     reward => market.RewardEstimate(reward.RewardName).Price, StringComparer.OrdinalIgnoreCase);
                 if (prices.Values.All(price => price is > 0))
                 {
                     open = relic.ExpectedValue(Refinement.Intact, prices);
+                    var best = primeRewards.OrderByDescending(reward => prices.GetValueOrDefault(reward.RewardName.ToLowerInvariant()) ?? 0)
+                        .ThenBy(reward => reward.RewardName, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+                    if (best is not null) { bestPart = best.RewardName; bestPartAsk = prices.GetValueOrDefault(best.RewardName.ToLowerInvariant()); }
                     rare = relic.Rewards.Where(reward => reward.Rarity.Equals("rare", StringComparison.OrdinalIgnoreCase))
                         .Sum(reward => Relic.Chance(Refinement.Intact, reward.Rarity));
                 }
             }
-            rows.Add((offer.Name, offer.Cost, sell, open, rare));
+            rows.Add(new(offer.Name, offer.Cost, sell, open, bestPart, bestPartAsk, rare));
         }
-        var ranked = rows.OrderByDescending(row => Math.Max(row.Sell ?? 0, row.Open ?? 0) / row.Aya)
-            .ThenBy(row => row.Name, StringComparer.OrdinalIgnoreCase).ToArray();
-        var lines = ranked.Take(15).Select((row, index) => $"**{index + 1}. {row.Name}** · {row.Aya} Aya · intact sell ask {Price(row.Sell)} · solo intact open EV {Price(row.Open)}" +
-            (row.Rare.HasValue ? $" · rare {row.Rare:0.#}%" : ""));
+        latestAyaSnapshot = snapshot; latestAyaRows = rows.ToArray();
+        return AyaText(snapshot, latestAyaRows);
+    }
+
+    private string AyaText(PrimeVendorSnapshot snapshot, IReadOnlyList<AyaValueRow> rows)
+    {
+        if (snapshot.Aya is not { } rotation || rotation.EndsAt <= DateTimeOffset.UtcNow)
+            return "Varzia's active rotation is unavailable in the official feed. No old rotation is being presented as current.";
+        var mode = state.AyaSort is AyaProfit.PrimeParts or AyaProfit.RelicSale ? state.AyaSort : AyaProfit.Overall;
+        var ranked = AyaProfit.Sort(rows, mode);
+        var modeLabel = mode switch
+        {
+            AyaProfit.PrimeParts => "Prime-part opening EV per Aya (from #prime-part-prices)",
+            AyaProfit.RelicSale => "intact relic sell ask per Aya",
+            _ => "higher of Prime-part opening EV or intact relic ask per Aya"
+        };
+        var lines = ranked.Take(15).Select((row, index) => $"**{index + 1}. {row.RelicName}** · {row.AyaCost} Aya · intact sell ask {Price(row.DirectSellAsk)} · solo intact Prime-part EV {Price(row.PrimePartEv)}" +
+            (row.BestPrimePart is { } part ? $" · top part {part} {Price(row.BestPrimePartAsk)}" : "") +
+            (row.RareChance.HasValue ? $" · rare {row.RareChance:0.#}%" : ""));
         var returning = snapshot.ReturningPrimes.Count > 0 ? string.Join(", ", snapshot.ReturningPrimes.Take(12)) : "not mapped";
-        return $"Varzia rotation ends <t:{rotation.EndsAt.ToUnixTimeSeconds()}:R>. Official manifest <t:{snapshot.SourceTime.ToUnixTimeSeconds()}:R>.\n\n" +
-            (ranked.Length == 0 ? "No current Aya relic could be matched to the market catalog." : string.Join('\n', lines)) +
-            $"\n\n**Returning Prime gear:** {returning}.\nOne Aya buys each listed relic at Varzia. Open EV is one player's average reward value, not guaranteed sale proceeds; no Aya/hour estimate without measured farm time. Regal Aya cosmetics are excluded.";
+        var next = "**Next Resurgence:** Not yet announced in the official preview.";
+        if (snapshot.NextAya is { } upcoming)
+        {
+            var featured = PrimeVendors.FeaturedPrimeSets(upcoming.FeaturedPackage, market.PrimeSetNames);
+            next = featured.Count > 0
+                ? $"**Announced next:** {string.Join(" & ", featured.Select(name => name[..^" Set".Length]))} · starts <t:{upcoming.StartsAt.ToUnixTimeSeconds()}:F> · ends <t:{upcoming.EndsAt.ToUnixTimeSeconds()}:F>."
+                : $"**Next Resurgence:** Official preview is available, but the featured Prime names could not be verified against the market catalog. Starts <t:{upcoming.StartsAt.ToUnixTimeSeconds()}:F>.";
+        }
+        return $"**Sorted by:** {modeLabel}. Varzia rotation ends <t:{rotation.EndsAt.ToUnixTimeSeconds()}:R>. Official manifest <t:{snapshot.SourceTime.ToUnixTimeSeconds()}:R>.\n\n" +
+            (ranked.Count == 0 ? "No current Aya relic could be matched to the market catalog." : string.Join('\n', lines)) +
+            $"\n\n**Returning Prime gear:** {returning}.\n{next} Future relic stock is not known until its manifest is published; this is an official preview, not a price prediction.\nPrime-part EV uses the same stabilized part prices as #prime-part-prices, weighted by intact drop chances. Unknown prices stay unranked for that sort. EV is one player's average reward value, not guaranteed profit; Aya farm time is not priced. Regal Aya cosmetics are excluded.";
+    }
+
+    private async Task DispatchButtonAsync(SocketMessageComponent interaction)
+    {
+        if (interaction.GuildId != guildId || interaction.ChannelId != state.AyaChannelId ||
+            !interaction.Data.CustomId.StartsWith("aya-sort:", StringComparison.Ordinal)) return;
+        await interaction.DeferAsync(ephemeral: true);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var mode = interaction.Data.CustomId["aya-sort:".Length..];
+                if (mode is not (AyaProfit.Overall or AyaProfit.PrimeParts or AyaProfit.RelicSale))
+                { await interaction.FollowupAsync("Unknown Aya sort.", ephemeral: true); return; }
+                await gate.WaitAsync();
+                try
+                {
+                    state.AyaSort = mode; Save();
+                    var channel = bot.GetGuild(guildId)?.GetTextChannel(state.AyaChannelId);
+                    if (channel is null) throw new InvalidOperationException("Aya board channel unavailable.");
+                    await PublishAsync(channel, true, "Prime Resurgence · Aya planner",
+                        latestAyaSnapshot is { } snapshot ? AyaText(snapshot, latestAyaRows) : "Waiting for the current Varzia manifest and Prime-part prices.",
+                        CancellationToken.None);
+                }
+                finally { gate.Release(); }
+                await interaction.FollowupAsync("Aya ranking updated.", ephemeral: true);
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine($"[aya-sort] {error}");
+                try { if (interaction.HasResponded) await interaction.FollowupAsync("Could not update the Aya sort; the next refresh will retry.", ephemeral: true); }
+                catch (Exception replyError) { Console.WriteLine($"[aya-sort] response failed: {replyError.GetType().Name}"); }
+            }
+        }, CancellationToken.None);
     }
 
     private async Task<string> BaroTextAsync(PrimeVendorSnapshot snapshot, CancellationToken ct)
@@ -257,14 +326,19 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
     private async Task PublishAsync(ITextChannel channel, bool aya, string title, string description, CancellationToken ct)
     {
         var text = description.Length <= 4096 ? description : description[..4093] + "…";
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text + (aya ? state.AyaSort : ""))));
         var oldId = aya ? state.AyaMessageId : state.BaroMessageId;
         var old = oldId == 0 ? null : await channel.GetMessageAsync(oldId) as IUserMessage;
         if (old is not null && (aya ? state.AyaHash : state.BaroHash) == hash) return;
         var embed = new EmbedBuilder().WithTitle(title).WithDescription(text).WithColor(aya ? new Color(0xB58BEEu) : new Color(0xF1C40Fu)).Build();
+        var controls = aya ? new ComponentBuilder()
+            .WithButton("Best overall", "aya-sort:overall", state.AyaSort == AyaProfit.Overall ? ButtonStyle.Primary : ButtonStyle.Secondary)
+            .WithButton("Prime-part profit", "aya-sort:prime-parts", state.AyaSort == AyaProfit.PrimeParts ? ButtonStyle.Primary : ButtonStyle.Secondary)
+            .WithButton("Sell relic", "aya-sort:relic-sale", state.AyaSort == AyaProfit.RelicSale ? ButtonStyle.Primary : ButtonStyle.Secondary)
+            .Build() : null;
         ulong messageId;
-        if (old is null) { var sent = await channel.SendMessageAsync(embed: embed, allowedMentions: AllowedMentions.None); messageId = sent.Id; }
-        else { await old.ModifyAsync(properties => { properties.Embed = embed; properties.AllowedMentions = AllowedMentions.None; }); messageId = old.Id; }
+        if (old is null) { var sent = await channel.SendMessageAsync(embed: embed, components: controls, allowedMentions: AllowedMentions.None); messageId = sent.Id; }
+        else { await old.ModifyAsync(properties => { properties.Embed = embed; properties.Components = controls; properties.AllowedMentions = AllowedMentions.None; }); messageId = old.Id; }
         if (aya) { state.AyaMessageId = messageId; state.AyaHash = hash; }
         else { state.BaroMessageId = messageId; state.BaroHash = hash; }
         Save();
@@ -272,5 +346,5 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
 
     private void Save() => Json.WriteAtomic(statePath, state);
     public async Task StopAsync() { if (cancellation is not null) await cancellation.CancelAsync(); if (worker is not null) await worker; status = "stopped"; }
-    public async ValueTask DisposeAsync() { await StopAsync(); cancellation?.Dispose(); official.Dispose(); gate.Dispose(); }
+    public async ValueTask DisposeAsync() { bot.ButtonExecuted -= DispatchButtonAsync; await StopAsync(); cancellation?.Dispose(); official.Dispose(); gate.Dispose(); }
 }

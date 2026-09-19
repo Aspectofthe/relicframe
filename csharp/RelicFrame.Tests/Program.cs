@@ -105,6 +105,21 @@ var portfolioSummary = PortfolioValuation.Calculate([
 ]);
 Assert(portfolioSummary == new PortfolioSummary(24, 2, 7, 1, 4),
     "portfolio excludes stale, missing, nonfinite and zero-stock prices while disclosing coverage");
+var ayaRanking = new AyaValueRow[]
+{
+    new("Lith A1 Relic", 1, 10, 40, "Alpha Prime Blueprint", 100, 2),
+    new("Meso B2 Relic", 1, 100, 20, "Beta Prime Blueprint", 50, 2),
+    new("Neo C3 Relic", 1, 50, null, null, null, null),
+    new("Axi D4 Relic", 1, null, null, null, null, null)
+};
+Assert(AyaProfit.Sort(ayaRanking, AyaProfit.PrimeParts).Select(row => row.RelicName)
+        .SequenceEqual(["Lith A1 Relic", "Meso B2 Relic", "Axi D4 Relic", "Neo C3 Relic"]),
+    "Aya Prime-part sort uses reward EV and puts unknown returns below priced rows");
+Assert(AyaProfit.Sort(ayaRanking, AyaProfit.RelicSale).Select(row => row.RelicName)
+        .SequenceEqual(["Meso B2 Relic", "Neo C3 Relic", "Lith A1 Relic", "Axi D4 Relic"]),
+    "Aya direct-sale sort is independent of Prime-part EV");
+Assert(AyaProfit.Sort([new("Two Aya", 2, 0, 60, null, null, null), new("One Aya", 1, 0, 40, null, null, null)],
+        AyaProfit.PrimeParts)[0].RelicName == "One Aya", "Aya return is ranked per unit of Aya cost");
 Assert(PrimeVendors.NormalizeGameRef("/Lotus/StoreItems/Types/Game/Projections/TestBronze") ==
     "/Lotus/Types/Game/Projections/Test", "Varzia StoreItems relic reference maps to market base relic");
 var vendorNow = new DateTimeOffset(2026, 9, 19, 18, 0, 0, TimeSpan.Zero);
@@ -113,7 +128,11 @@ using (var vendorFixture = JsonDocument.Parse("{\"Time\":" + vendorNow.ToUnixTim
     ",\"PrimeVaultTraders\":[{\"Activation\":" + VendorDate(-30) + ",\"Expiry\":" + VendorDate(10) +
     ",\"Manifest\":[{\"ItemType\":\"/Lotus/StoreItems/Types/Game/Projections/TestBronze\",\"RegularPrice\":1}," +
     "{\"ItemType\":\"/Lotus/StoreItems/Powersuits/Test/TestPrime\",\"PrimePrice\":3}," +
-    "{\"ItemType\":\"/Lotus/StoreItems/Upgrades/Skins/Test\",\"PrimePrice\":2}] }]," +
+    "{\"ItemType\":\"/Lotus/StoreItems/Upgrades/Skins/Test\",\"PrimePrice\":2}]," +
+    "\"ScheduleInfo\":[{\"Expiry\":" + VendorDate(70) + ",\"PreviewHiddenUntil\":" + VendorDate(-1) +
+    ",\"FeaturedItem\":\"/Lotus/Types/StoreItems/Packages/MegaPrimeVault/MPVProteaIvaraPrimeDualPack\"}," +
+    "{\"Expiry\":" + VendorDate(130) + ",\"PreviewHiddenUntil\":" + VendorDate(40) +
+    ",\"FeaturedItem\":\"/Lotus/Types/StoreItems/Packages/MegaPrimeVault/MPVHiddenPrimeSinglePack\"}] }]," +
     "\"VoidTraders\":[{\"Activation\":" + VendorDate(-10) + ",\"Expiry\":" + VendorDate(10) +
     ",\"Manifest\":[{\"ItemType\":\"/Lotus/StoreItems/Upgrades/Mods/Test\",\"PrimePrice\":350,\"RegularPrice\":140000}]}]}"))
 {
@@ -127,6 +146,17 @@ using (var vendorFixture = JsonDocument.Parse("{\"Time\":" + vendorNow.ToUnixTim
     Assert(vendor.Aya?.Offers is [{ Name: "Lith T1 Relic", Cost: 1 }] && vendor.ReturningPrimes.SequenceEqual(["Test Prime Set"]) &&
         vendor.Baro?.Offers is [{ Name: "Primed Test", Cost: 350, Credits: 140000 }],
         "official Varzia and Baro parser separates Aya relics, Regal Aya gear and Ducat stock");
+    Assert(vendor.NextAya is { } announced && announced.StartsAt == vendorNow.AddMinutes(10) &&
+        announced.EndsAt == vendorNow.AddMinutes(70) &&
+        PrimeVendors.FeaturedPrimeSets(announced.FeaturedPackage, ["Protea Prime Set", "Ivara Prime Set"])
+            .SequenceEqual(["Protea Prime Set", "Ivara Prime Set"]),
+        "revealed official next Resurgence identifies verified Prime sets and dates");
+    Assert(PrimeVendors.FeaturedPrimeSets("/MPVUnknownPrimeDualPack", ["Protea Prime Set"]).Count == 0,
+        "unmapped upcoming packages are not guessed");
+    using var hiddenFixture = JsonDocument.Parse(vendorFixture.RootElement.GetRawText()
+        .Replace("\"PreviewHiddenUntil\":" + VendorDate(-1), "\"PreviewHiddenUntil\":" + VendorDate(1), StringComparison.Ordinal));
+    Assert(PrimeVendors.Parse(hiddenFixture.RootElement, _ => null, vendorNow).NextAya is null,
+        "unrevealed future rotations stay hidden even if a package appears in the feed");
     Assert(PrimeVendors.Parse(vendorFixture.RootElement, _ => null, vendorNow.AddMinutes(15)).Aya is null,
         "expired Prime Resurgence stock is never reported as current");
 }
