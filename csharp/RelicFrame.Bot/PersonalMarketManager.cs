@@ -24,6 +24,9 @@ internal sealed record PersonalMarketState
     public PersonalMarketSale[] SaleHistory { get; set; } = [];
     public string[] LastActions { get; set; } = [];
     public DateTimeOffset? LastAccountSync { get; set; }
+    public DateOnly? PortfolioBaselineDate { get; set; }
+    public double? PortfolioBaselineAskValue { get; set; }
+    public int PortfolioBaselinePricedItems { get; set; }
 }
 internal sealed record PersonalMarketSale(string ItemId, string ItemName, string OrderId, int Quantity, int PlatinumEach, DateTimeOffset DetectedAt);
 internal sealed record PersonalMarketSettings
@@ -244,6 +247,23 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         // matching raw decrease then clears the newly-created temporary deduction.
         sourceActions.AddRange(ReconcileAlecaSnapshot(rawInventory));
         var inventory = PrimeInventory.SubtractPendingSales(rawInventory, state.PendingSoldQuantities, ItemIdForInventory);
+        var portfolioPositions = inventory.Select(item => new
+        {
+            Item = item,
+            Name = !string.IsNullOrWhiteSpace(item.ItemName) ? item.ItemName : market.NameForGameRef(item.GameRef)
+        }).Where(row => row.Name is not null &&
+            (row.Name.Contains(" Prime ", StringComparison.OrdinalIgnoreCase) || row.Name.EndsWith(" Prime", StringComparison.OrdinalIgnoreCase)))
+          .Select(row => new PortfolioPosition(row.Name!, row.Item.Quantity,
+              market.RewardEstimate(row.Name!, ownSellerSlug).Price,
+              market.IsBookFresh(row.Name!, TimeSpan.FromMinutes(10)))).ToArray();
+        var portfolio = PortfolioValuation.Calculate(portfolioPositions);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (state.PortfolioBaselineDate != today && portfolio.PricedItems > 0)
+        {
+            state.PortfolioBaselineDate = today;
+            state.PortfolioBaselineAskValue = portfolio.EstimatedAskValue;
+            state.PortfolioBaselinePricedItems = portfolio.PricedItems;
+        }
         var blockedIds = new HashSet<string>(StringComparer.Ordinal);
         var setInventory = new List<PrimeInventoryEntry>();
         if (marketUsable)
@@ -271,11 +291,12 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         }).Where(row => row.Name is not null && (row.Name.Contains(" Prime ", StringComparison.OrdinalIgnoreCase) || row.Name.EndsWith(" Prime", StringComparison.OrdinalIgnoreCase))).ToArray();
         var assessed = candidates.Select(row =>
         {
-            var estimate = market.RewardEstimate(row.Name!, ownSellerSlug);
+            var bookFresh = market.IsBookFresh(row.Name!, TimeSpan.FromMinutes(10));
+            var estimate = bookFresh ? market.RewardEstimate(row.Name!, ownSellerSlug) : new RewardPriceEstimate(null, null, null, 0, false);
             var visible = market.Match(row.Name!, null, false, excludedSellerSlug: ownSellerSlug).Entries;
             var reference = estimate.Price.HasValue ? visible.MinBy(entry => Math.Abs(entry.Price - estimate.Price.Value)) : null;
             var best = estimate.Price.HasValue ? new OrderEntry(estimate.Price.Value, reference?.Quantity, Seller: reference?.Seller ?? "stabilized market") : null;
-            return new { row.Item, Name = row.Name!, Best = best, Quote = PrimeInventory.Quote(row.Item, row.Name, estimate.Price, best?.Seller ?? "", minimumPrice, undercut), BookFresh = market.IsBookFresh(row.Name!, TimeSpan.FromMinutes(10)) };
+            return new { row.Item, Name = row.Name!, Best = best, Quote = PrimeInventory.Quote(row.Item, row.Name, estimate.Price, best?.Seller ?? "", minimumPrice, undercut), BookFresh = bookFresh };
         }).ToArray();
         var quotes = assessed.Select(row => row.Quote).OfType<PersonalMarketQuote>().OrderByDescending(row => row.DraftPrice).ThenBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase).ToArray();
         if (state.AutoPublishEnabled == true && marketUsable && orders is not null)
@@ -306,11 +327,21 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         var belowExamples = string.Join(", ", belowFloor.Take(3).Select(row => $"{row.Name} {row.Best!.Price:0.#}p"));
         var pricedCandidates = assessed.Count(row => row.Best is not null);
         description += $"\n**Independent listing rules:** every mapped owned Prime part, both **Vaulted and Unvaulted**; THE LIST display filters are not used. Shared relic-scanner price coverage: {pricedCandidates}/{candidates.Length}. Skipped below {minimumPrice}p: {belowFloor.Length}{(belowExamples.Length > 0 ? $" ({belowExamples})" : "")} · no usable in-game ask: {noAsk}.";
+        if (portfolio.TotalItems > 0)
+        {
+            description += $"\n\n**Prime portfolio** · estimated ask value **{portfolio.EstimatedAskValue:0.#}p** for {portfolio.PricedUnits}/{portfolio.TotalUnits} units ({portfolio.PricedItems}/{portfolio.TotalItems} item types with fresh prices). Unpriced stock is excluded; this is not realized profit or guaranteed sale value.";
+            if (state.PortfolioBaselineDate == today && state.PortfolioBaselineAskValue is { } baseline && state.PortfolioBaselinePricedItems == portfolio.PricedItems)
+                description += $" Today vs first priced snapshot: **{portfolio.EstimatedAskValue - baseline:+0.#;-0.#;0}p** (includes inventory changes and price moves).";
+        }
         if (state.AutoPublishEnabled == true && !marketUsable) description += $"\nAccount writes wait for usable market books; current market: **{market.Status}**.";
         if (state.LastActions.Length > 0) description += "\n\n**Latest account activity**\n" + string.Join('\n', state.LastActions.Take(6));
         if (state.SaleHistory.Length > 0)
-            description += "\n\n**Recent tracked sales**\n" + string.Join('\n', state.SaleHistory.Take(3).Select(sale =>
-                $"• **{sale.ItemName}** ×{sale.Quantity}{(sale.PlatinumEach > 0 ? $" at {sale.PlatinumEach}p each" : "")} · <t:{sale.DetectedAt.ToUnixTimeSeconds()}:R>"));
+        {
+            var confirmedSales = state.SaleHistory.Where(sale => sale.OrderId.StartsWith("alecaframe:", StringComparison.Ordinal) && sale.PlatinumEach > 0).ToArray();
+            var gross = confirmedSales.Sum(sale => (long)sale.Quantity * sale.PlatinumEach);
+            description += $"\n\n**Sale ledger** · {gross}p completed-trade gross ({confirmedSales.Length} priced trades); {state.SaleHistory.Length - confirmedSales.Length} unpriced or provisional entries. Purchase cost is unknown, so net profit cannot be calculated.\n" + string.Join('\n', state.SaleHistory.Take(3).Select(sale =>
+                $"• **{sale.ItemName}** ×{sale.Quantity}{(sale.PlatinumEach > 0 ? $" at {sale.PlatinumEach}p each" : "")} · {(sale.OrderId.StartsWith("alecaframe:", StringComparison.Ordinal) ? "completed trade" : "order change; provisional")} · <t:{sale.DetectedAt.ToUnixTimeSeconds()}:R>"));
+        }
         var pendingSold = state.PendingSoldQuantities.Values.Sum(value => Math.Max(0, value));
         var alecaTradeMode = File.Exists(alecaPublicTokenPath) ? "completed-trade feed connected" : $"not connected; add a trades-only public token at `{alecaPublicTokenPath}`";
         description += $"\nAlecaFrame {alecaTradeMode}. Completed sales and managed Warframe.market quantity reductions remove stale stock immediately. Pending stale-cache deduction: **{pendingSold}** item(s).";

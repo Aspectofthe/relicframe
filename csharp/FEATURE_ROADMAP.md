@@ -42,8 +42,8 @@ This is the implementation tracker for the requested platinum-making features. A
 | Lich/Sister market helper | Not yet | Needs contract-specific attributes and market comparables; ordinary item-book prices are invalid. |
 | Open-world sales board | Not yet | Needs a verified tradable catalog and quantity/per-trade market handling. |
 | Daily platinum route | Not yet | Depends on measured mission times, player unlocks, inventory and liquidity from the earlier features. |
-| Portfolio dashboard | Not yet | Needs account inventory, liquid-price estimates and a saved daily valuation baseline. |
-| Personal Market improvements | Partial | Sale-adjusted inventory, managed-order reconciliation, price floor and pause exist; realized-cost ledger, stale-listing flags and bounded repricing policy remain. |
+| Portfolio dashboard | Partial | Owner-only Personal Market now shows fresh-price Prime inventory ask value, coverage and a first-priced-snapshot daily change. Liquid/slow stock requires verified trade activity; this value is not realized proceeds. |
+| Personal Market improvements | Partial | Sale-adjusted inventory, managed-order reconciliation, price floor and pause exist. The board now distinguishes completed-trade gross from provisional order changes and refuses to create/reprice listings from stale books. Purchase-cost basis, stale-listing age flags and bounded repricing policy remain. |
 
 ## Delivery order
 

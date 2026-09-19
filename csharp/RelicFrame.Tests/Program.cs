@@ -98,6 +98,13 @@ Assert(ApplicationEmojis.Relic("Axi D4", Refinement.Radiant) == "<:AxiRelicRadia
 Assert(ApplicationEmojis.Relic("Requiem I", Refinement.Radiant) == ApplicationEmojis.VoidFissureNode, "unsupported relic era uses generic fissure emoji");
 Assert(RivenPricing.AllowedStats("melee", true).Contains("channeling_damage") && RivenPricing.DisplayName("channeling_damage") == "Initial Combo", "melee filters expose current Initial Combo naming");
 Assert(!RivenPricing.AllowedStats("rifle", true).Contains("channeling_damage") && !RivenPricing.AllowedStats("melee", true).Contains("multishot"), "Riven filters stay within the selected weapon class");
+var portfolioSummary = PortfolioValuation.Calculate([
+    new("A Prime Blueprint", 2, 12, true), new("B Prime Barrel", 3, 30, false),
+    new("C Prime Receiver", 1, null, true), new("D Prime Stock", 0, 100, true),
+    new("E Prime Blade", 1, double.NaN, true)
+]);
+Assert(portfolioSummary == new PortfolioSummary(24, 2, 7, 1, 4),
+    "portfolio excludes stale, missing, nonfinite and zero-stock prices while disclosing coverage");
 Assert(RivenPricing.EndoValue(13, 0, 0) == 515 && RivenPricing.EndoValue(8, 8, 10) == 7753, "Riven dissolve Endo formula includes mastery, mod rank and rerolls");
 var relicFilterFixture = Path.Combine(Path.GetTempPath(), "relicframe-relic-filter-" + Guid.NewGuid().ToString("N") + ".csv");
 try
