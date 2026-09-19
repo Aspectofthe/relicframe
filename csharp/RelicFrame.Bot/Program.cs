@@ -93,6 +93,7 @@ await using var panel = new RelicPanelManager(socket, market, relics, guildId, r
 await using var personalMarket = new PersonalMarketManager(socket, market, http, guildId, runtimePath);
 await using var primeSetCompletion = new PrimeSetCompletionManager(socket, market, http, personalMarket, guildId, runtimePath);
 await using var arcaneEconomy = new ArcaneEconomyManager(socket, market, http, guildId, runtimePath);
+await using var primeVendors = new PrimeVendorManager(socket, market, http, relics, guildId, runtimePath);
 var rivenEvidence = new RivenEvidenceControls(socket, rivens, guildId);
 using var rivenImages = new RivenImageWorkflow(socket, rivens, tradeChat, rivenEvidence, guildId);
 var rivenPanel = new RivenAppraisalPanel(socket, rivens, tradeChat, rivenEvidence, guildId, runtimePath);
@@ -190,7 +191,7 @@ socket.SlashCommandExecuted += async command =>
                 $"Overall loading: {OverallLoadingStatus()}.\n" +
                 $"RAM: {process.WorkingSet64 / 1048576d:F1} MiB. Commands: {(jobs.Reader.CanCount ? jobs.Reader.Count : 0)}/16 queued; {commandWorkerCount} workers. Market: {market.Status}; refreshed {market.RefreshedBooks}/{market.TotalBooks}, available {market.ReadyBooks}/{market.TotalBooks}; WebSocket {market.WebSocketStatus}.\n" +
                 $"Rivens: {rivens.Status}.\nOutgoing Trade Chat: {(eeLogEnabled ? eeTradeChat.Status : "EE.log collector disabled")}\n" +
-                $"Visible Trade Chat: {(screenOcrEnabled ? screenTradeChat.Status : "screen OCR disabled")}\nWorld: {world.Status}. Panel: {panel.Status}. Personal Market: {personalMarket.Status}. Arcane Economy: {arcaneEconomy.Status}.\nLast command error: {lastCommandError}.", ephemeral: true, allowedMentions: AllowedMentions.None);
+                $"Visible Trade Chat: {(screenOcrEnabled ? screenTradeChat.Status : "screen OCR disabled")}\nWorld: {world.Status}. Panel: {panel.Status}. Personal Market: {personalMarket.Status}. Arcane Economy: {arcaneEconomy.Status}. Prime vendors: {primeVendors.Status}.\nLast command error: {lastCommandError}.", ephemeral: true, allowedMentions: AllowedMentions.None);
             return;
         }
         // Acknowledge before dispatch, including when market initialization or calculations are busy.
@@ -269,6 +270,7 @@ async Task ConfigureGuild(SocketGuild guild)
         var personalResult = await personalMarket.SetupAsync(guild, lifetime.Token, lifetime.Token); Console.WriteLine("[setup] " + personalResult);
         var completionResult = await primeSetCompletion.SetupAsync(guild, lifetime.Token, lifetime.Token); Console.WriteLine("[setup] " + completionResult);
         var arcaneResult = await arcaneEconomy.SetupAsync(guild, lifetime.Token, lifetime.Token); Console.WriteLine("[setup] " + arcaneResult);
+        var vendorResult = await primeVendors.SetupAsync(guild, lifetime.Token, lifetime.Token); Console.WriteLine("[setup] " + vendorResult);
         await rivens.StartAsync(lifetime.Token);
         registered = true; Console.WriteLine("[ready] C# preview commands registered in test guild only; market waits for /rf-relics refresh.");
     }
@@ -314,7 +316,7 @@ catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
 finally
 {
     lifetime.Cancel(); jobs.Writer.TryComplete();
-    await arcaneEconomy.StopAsync(); await primeSetCompletion.StopAsync(); await personalMarket.StopAsync(); await market.StopAsync(); await rivens.StopAsync(); await world.StopAsync(); await panel.StopAsync(); await Task.WhenAll(workers);
+    await primeVendors.StopAsync(); await arcaneEconomy.StopAsync(); await primeSetCompletion.StopAsync(); await personalMarket.StopAsync(); await market.StopAsync(); await rivens.StopAsync(); await world.StopAsync(); await panel.StopAsync(); await Task.WhenAll(workers);
     await socket.StopAsync(); await socket.LogoutAsync(); registration.Dispose();
 }
 

@@ -105,6 +105,41 @@ var portfolioSummary = PortfolioValuation.Calculate([
 ]);
 Assert(portfolioSummary == new PortfolioSummary(24, 2, 7, 1, 4),
     "portfolio excludes stale, missing, nonfinite and zero-stock prices while disclosing coverage");
+Assert(PrimeVendors.NormalizeGameRef("/Lotus/StoreItems/Types/Game/Projections/TestBronze") ==
+    "/Lotus/Types/Game/Projections/Test", "Varzia StoreItems relic reference maps to market base relic");
+var vendorNow = new DateTimeOffset(2026, 9, 19, 18, 0, 0, TimeSpan.Zero);
+string VendorDate(int minutes) => "{\"$date\":{\"$numberLong\":\"" + vendorNow.AddMinutes(minutes).ToUnixTimeMilliseconds() + "\"}}";
+using (var vendorFixture = JsonDocument.Parse("{\"Time\":" + vendorNow.ToUnixTimeSeconds() +
+    ",\"PrimeVaultTraders\":[{\"Activation\":" + VendorDate(-30) + ",\"Expiry\":" + VendorDate(10) +
+    ",\"Manifest\":[{\"ItemType\":\"/Lotus/StoreItems/Types/Game/Projections/TestBronze\",\"RegularPrice\":1}," +
+    "{\"ItemType\":\"/Lotus/StoreItems/Powersuits/Test/TestPrime\",\"PrimePrice\":3}," +
+    "{\"ItemType\":\"/Lotus/StoreItems/Upgrades/Skins/Test\",\"PrimePrice\":2}] }]," +
+    "\"VoidTraders\":[{\"Activation\":" + VendorDate(-10) + ",\"Expiry\":" + VendorDate(10) +
+    ",\"Manifest\":[{\"ItemType\":\"/Lotus/StoreItems/Upgrades/Mods/Test\",\"PrimePrice\":350,\"RegularPrice\":140000}]}]}"))
+{
+    var vendor = PrimeVendors.Parse(vendorFixture.RootElement, gameRef => gameRef switch
+    {
+        "/Lotus/Types/Game/Projections/Test" => "Lith T1 Relic",
+        "/Lotus/Powersuits/Test/TestPrime" => "Test Prime Set",
+        "/Lotus/Upgrades/Mods/Test" => "Primed Test",
+        _ => null
+    }, vendorNow);
+    Assert(vendor.Aya?.Offers is [{ Name: "Lith T1 Relic", Cost: 1 }] && vendor.ReturningPrimes.SequenceEqual(["Test Prime Set"]) &&
+        vendor.Baro?.Offers is [{ Name: "Primed Test", Cost: 350, Credits: 140000 }],
+        "official Varzia and Baro parser separates Aya relics, Regal Aya gear and Ducat stock");
+    Assert(PrimeVendors.Parse(vendorFixture.RootElement, _ => null, vendorNow.AddMinutes(15)).Aya is null,
+        "expired Prime Resurgence stock is never reported as current");
+}
+using (var vendorStats = JsonDocument.Parse("[{\"datetime\":\"2026-09-18T12:00:00Z\",\"volume\":5,\"median\":20,\"mod_rank\":0}," +
+    "{\"datetime\":\"2026-09-18T12:00:00Z\",\"volume\":100,\"median\":200,\"mod_rank\":10}]"))
+{
+    var sales = PrimeVendors.Sales(vendorStats.RootElement, vendorNow, true);
+    Assert(sales.MedianR0 == 20 && sales.SalesPerDay > 0 && sales.SalesPerDay < 1,
+        "Baro historical ranking uses rank-zero activity instead of maxed mod prices");
+    Assert(PrimeVendors.SalesBetween(vendorStats.RootElement, vendorNow.AddDays(-2), vendorNow, true).MedianR0 == 20 &&
+        PrimeVendors.SalesBetween(vendorStats.RootElement, vendorNow.AddDays(-2), vendorNow, false).MedianR0 == 200,
+        "post-visit time windows preserve rank-zero filtering and weighted median");
+}
 Assert(RivenPricing.EndoValue(13, 0, 0) == 515 && RivenPricing.EndoValue(8, 8, 10) == 7753, "Riven dissolve Endo formula includes mastery, mod rank and rerolls");
 var relicFilterFixture = Path.Combine(Path.GetTempPath(), "relicframe-relic-filter-" + Guid.NewGuid().ToString("N") + ".csv");
 try

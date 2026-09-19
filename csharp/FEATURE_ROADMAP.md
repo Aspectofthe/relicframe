@@ -21,9 +21,9 @@ This is the implementation tracker for the requested platinum-making features. A
 | Relic opening versus selling | Implemented in this batch | Selected relic's drop view compares reward EV against the same-refinement relic's online sell ask; missing prices suppress advice. |
 | Radshare calculator | Implemented in this batch | Selected relic's drop view shows rare-visible probability and the best selectable reward EV for 1–4 players. It is per player, not combined squad revenue. |
 | Vault investment tracker | Not yet | Needs dated vault transitions, genuine historical supply, and liquidity. No guaranteed appreciation claims. |
-| Prime Resurgence/Aya planner | Not yet | Needs current official Varzia rotation and a verified relic-to-Aya acquisition model. |
+| Prime Resurgence/Aya planner | Implemented | New `#aya-planner` reads current official Varzia relic stock and Aya costs, ranks by intact sell ask/open EV per Aya, and names returning Prime gear. Aya farm time remains unknown, so no invented platinum/hour. |
 | Prime-junk and Ducat evaluator | Implemented | Existing Ducat efficiency and reward-value views. |
-| Baro investment assistant | Not yet | Needs dated stock/cost history and post-departure *sales*, not just current asks. |
+| Baro investment assistant | Partial | New `#baro-investments` reads official current stock, Ducat/Credit costs, rank-zero 30-day closed-order medians, activity and live asks. It records observed visits and uses 1–30-day post-departure medians when a prior observed visit has at least three reporting days. Optional `RELICFRAME_DUCAT_COST_PLAT` produces an estimated margin. Closed orders are not confirmed trades; Credit opportunity cost and any future resale price remain unknown. |
 | Syndicate standing converter | Not yet | Needs current vendor inventories/standing costs and ranked trade volume. |
 | Arcane profit board | Partial | Arcane collection EV, quick-sale ordering and rank-separated market estimates exist; acquisition-location profit/hour does not. |
 | Vosfor calculator | Implemented | Dissolve-versus-sell and pack EV already exist; values remain estimated asks. |

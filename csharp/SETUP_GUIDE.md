@@ -87,6 +87,8 @@ Run these checks in Discord:
 3. `/rf-panel setup` — repair **THE LIST** and its ranking channels.
 4. `/rf-relics refresh` — start or restart the shared market-price refresh when required.
 
+The bot also creates **PRIME ECONOMY / #aya-planner** and **#baro-investments**. These read Digital Extremes' current vendor manifests; neither requires an account token. The Aya board compares listed relic asks with intact solo opening EV. The Baro board shows Ducat/Credit costs and recent rank-zero market activity, but does not promise post-departure profit. Optionally set `RELICFRAME_DUCAT_COST_PLAT` to your own platinum cost per Ducat to see an estimated margin; leave it unset if you do not know that cost.
+
 The member running setup commands needs **Manage Server**. The bot itself needs **Manage Channels** and **Manage Roles**. Initial market and Riven loading can continue in the background; `/rf-status` reports its current stage.
 
 ## 7. Optional Personal Market setup
