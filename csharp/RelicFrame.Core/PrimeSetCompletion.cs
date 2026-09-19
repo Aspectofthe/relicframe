@@ -7,6 +7,8 @@ public sealed record PrimeSetDefinition(string SetItemId, string SetName, IReadO
 public sealed record PrimeSetOpportunity(string SetName, string MissingItem, int MissingQuantity,
     int MissingCost, int SetValue, int CompletionProfit, int OwnedComponentUnits, int RequiredComponentUnits);
 public sealed record PrimeCompletionRelic(string Name, Refinement Refinement, double Price, double DropChance);
+public sealed record PrimeSetSaleComparison(string SetName, int SetValue, int OwnedPartsValue,
+    int MissingCost, int NetSetValue, int Advantage, bool Complete, int OwnedComponentUnits, int RequiredComponentUnits);
 
 public sealed class PrimeSetCompletion
 {
@@ -114,6 +116,80 @@ public sealed class PrimeSetCompletion
                 missingCost, setValue, setValue - missingCost, row.OwnedUnits, row.Definition.Components.Sum(component => component.Quantity)));
         }
         return opportunities.OrderByDescending(row => row.CompletionProfit).ThenByDescending(row => row.SetValue)
+            .ThenBy(row => row.SetName, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    public async Task<IReadOnlyList<PrimeSetSaleComparison>> ComparePartsAndSetsAsync(
+        IEnumerable<PrimeInventoryEntry> inventory, string? excludedSellerSlug, CancellationToken ct)
+    {
+        var owned = inventory.Select(row => new
+            {
+                Name = !string.IsNullOrWhiteSpace(row.ItemName) ? row.ItemName.Trim() : market.NameForGameRef(row.GameRef),
+                row.Quantity
+            })
+            .Where(row => !string.IsNullOrWhiteSpace(row.Name) && row.Quantity > 0)
+            .GroupBy(row => row.Name!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Sum(row => row.Quantity), StringComparer.OrdinalIgnoreCase);
+        var candidates = market.PrimeSetNames.Where(setName =>
+        {
+            var family = setName.EndsWith(" Set", StringComparison.OrdinalIgnoreCase) ? setName[..^4] : setName;
+            return owned.Keys.Any(itemName => itemName.Equals(family, StringComparison.OrdinalIgnoreCase)
+                || itemName.StartsWith(family + " ", StringComparison.OrdinalIgnoreCase));
+        });
+        var comparisons = new List<PrimeSetSaleComparison>();
+        foreach (var setName in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            PrimeSetDefinition? definition;
+            try { definition = await DefinitionAsync(setName, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            { Console.WriteLine($"[part-versus-set] {setName}: {error.GetType().Name}; skipped"); continue; }
+            if (definition is null) continue;
+            var missing = definition.Components.Select(component => new
+            {
+                Component = component,
+                Quantity = Math.Max(0, component.Quantity - owned.GetValueOrDefault(component.ItemName))
+            }).Where(row => row.Quantity > 0).ToArray();
+            if (missing.Length > 1) continue;
+            if (!market.IsBookFresh(setName, TimeSpan.FromMinutes(30)) && !await market.EnsureBookAsync(setName, ct)) continue;
+            var setPrice = market.RewardEstimate(setName, excludedSellerSlug).Price;
+            if (!setPrice.HasValue) continue;
+            var partsValue = 0.0;
+            var ownedUnits = 0;
+            var priced = true;
+            foreach (var component in definition.Components)
+            {
+                var count = Math.Min(component.Quantity, owned.GetValueOrDefault(component.ItemName));
+                if (count == 0) continue;
+                ownedUnits += count;
+                // Only use already-scanned component books. A comparison must not start
+                // another full Prime-part API sweep or treat stale asks as current.
+                if (!market.IsBookFresh(component.ItemName, TimeSpan.FromMinutes(30))) { priced = false; break; }
+                var price = market.RewardEstimate(component.ItemName, excludedSellerSlug).Price;
+                if (!price.HasValue) { priced = false; break; }
+                partsValue += count * price.Value;
+            }
+            if (!priced || ownedUnits == 0) continue;
+            var missingCost = 0.0;
+            if (missing.Length == 1)
+            {
+                var item = missing[0].Component.ItemName;
+                if (!market.IsBookFresh(item, TimeSpan.FromMinutes(30)) && !await market.EnsureBookAsync(item, ct)) continue;
+                var asks = market.Match(item, null, true, excludedSellerSlug: excludedSellerSlug).Entries;
+                var purchase = OrderMath.Cheapest(asks, missing[0].Quantity);
+                if (!purchase.FullyFilled) continue;
+                missingCost = purchase.TotalCost;
+            }
+            var setValue = (int)Math.Floor(setPrice.Value);
+            var parts = (int)Math.Floor(partsValue);
+            var cost = (int)Math.Ceiling(missingCost);
+            comparisons.Add(new(setName, setValue, parts, cost, setValue - cost,
+                setValue - cost - parts, missing.Length == 0, ownedUnits,
+                definition.Components.Sum(component => component.Quantity)));
+        }
+        return comparisons.OrderByDescending(row => Math.Abs(row.Advantage))
+            .ThenByDescending(row => row.NetSetValue)
             .ThenBy(row => row.SetName, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 

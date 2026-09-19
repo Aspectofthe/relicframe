@@ -34,6 +34,8 @@ Windows: run `.\csharp\run-bot.cmd`. Linux: run `chmod +x csharp/run-bot.sh && .
 
 The C# test bot also creates an owner-only Personal Market board. With explicit local authorization it can reuse AlecaFrame's local JWT to create/update bounded Prime sell listings while enforcing a price floor and owner-only emergency pause. Credentials are never printed or committed; automatic trading remains a Warframe.market grey area.
 
+The requested platinum features and their actual implementation status are tracked in [csharp/FEATURE_ROADMAP.md](csharp/FEATURE_ROADMAP.md). It separates existing functionality from partial and planned work and records the pricing/liquidity safeguards for future additions.
+
 Market/world/Discord boards and attached-image OCR are platform-independent. Steam/Proton EE.log discovery and Linux Trade Chat capture are supported with the setup documented in the C# guide.
 
 Riven screenshots use local Tesseract OCR only—no OpenAI or third-party OCR service. `/rf-riven appraise image:` runs four image-processing passes, validates the recognized weapon and attributes, then requires a private editable confirmation before it requests a price.

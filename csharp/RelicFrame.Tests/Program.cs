@@ -123,6 +123,20 @@ Assert(cheapestCompletionRelic is { Name: "Vanguard Test", Refinement: Refinemen
     "completion source selection includes unvaulted relics, rejects refinement fallback and breaks equal-price ties by drop chance");
 Assert(PrimeSetCompletion.CheapestSourceRelic(completionSources, "Absent Prime Part", (_, _) => new OrderMatch([new OrderEntry(1, 1)], true)) is null,
     "completion relic must actually contain the missing component");
+var squadRelic = new Relic("Lith Squad", [new("C1", "common"), new("C2", "common"), new("C3", "common"),
+    new("U1", "uncommon"), new("U2", "uncommon"), new("R1", "rare")]);
+var squadPrices = new Dictionary<string, double?> { ["C1"] = 1, ["C2"] = 1, ["C3"] = 1,
+    ["U1"] = 5, ["U2"] = 5, ["R1"] = 20 };
+var squadDecision = RelicOpeningDecision.Compare(squadRelic, Refinement.Radiant, squadPrices, 4);
+Assert(squadDecision.Count == 4 && Math.Abs(squadDecision[0].BestRewardEv - 4.5) < 0.01
+    && Math.Abs(squadDecision[0].RareChancePct - 10) < 0.01
+    && Math.Abs(squadDecision[3].RareChancePct - 34.39) < 0.01
+    && squadDecision[3].BestRewardEv > squadDecision[0].BestRewardEv
+    && Math.Abs(squadDecision[0].NetVersusSelling!.Value - .5) < .01,
+    "opening versus selling and squad best-choice EV normalize rounded slots and model independent rare chances");
+Assert(RelicOpeningDecision.Compare(squadRelic, Refinement.Radiant,
+    new Dictionary<string, double?> { ["C1"] = 1 }, 4).Count == 0,
+    "missing reward prices never become zero-valued opening advice");
 var salesNow = DateTimeOffset.Parse("2026-09-15T12:00:00Z");
 using (var salesJson = JsonDocument.Parse("""
     [{"datetime":"2026-09-15T10:00:00Z","mod_rank":0,"volume":12},
@@ -676,6 +690,28 @@ var retryHandler = new RetryHandler();
         Assert(opportunities is [{ SetName: "Example Prime Set", MissingItem: "Example Prime Blade", MissingQuantity: 1,
             MissingCost: 7, SetValue: 50, CompletionProfit: 43, OwnedComponentUnits: 2, RequiredComponentUnits: 3 }],
             "Prime-set completion honors quantityInSet and ranks the one missing component by net completion profit");
+        Assert((await completion.ComparePartsAndSetsAsync([
+            new PrimeInventoryEntry("example-blueprint", 1, "Example Prime Blueprint"),
+            new PrimeInventoryEntry("example-blade", 1, "Example Prime Blade")
+        ], null, default)).Count == 0, "part/set comparison omits unpriced owned components rather than inventing an advantage");
+        Assert(await setMarket.EnsureBookAsync("Example Prime Blueprint", default), "part/set comparison can reuse a loaded Prime-part book");
+        var oneAwayComparison = await completion.ComparePartsAndSetsAsync([
+            new PrimeInventoryEntry("example-blueprint", 1, "Example Prime Blueprint"),
+            new PrimeInventoryEntry("example-blade", 1, "Example Prime Blade")
+        ], null, default);
+        Assert(oneAwayComparison is [{ Complete: false, SetValue: 50, OwnedPartsValue: 18, MissingCost: 7, NetSetValue: 43, Advantage: 25 }],
+            "one-away comparison subtracts the missing purchase before comparing to selling owned parts");
+        var missingWholeComponent = await completion.ComparePartsAndSetsAsync([
+            new PrimeInventoryEntry("example-blueprint", 1, "Example Prime Blueprint")
+        ], null, default);
+        Assert(missingWholeComponent is [{ Complete: false, OwnedPartsValue: 11, MissingCost: 14, NetSetValue: 36, Advantage: 25 }],
+            "part/set comparison includes a wholly missing component type when other parts are owned");
+        var completeComparison = await completion.ComparePartsAndSetsAsync([
+            new PrimeInventoryEntry("example-blueprint", 1, "Example Prime Blueprint"),
+            new PrimeInventoryEntry("example-blade", 2, "Example Prime Blade")
+        ], null, default);
+        Assert(completeComparison is [{ Complete: true, SetValue: 50, OwnedPartsValue: 25, MissingCost: 0, Advantage: 25 }],
+            "complete set comparison accounts for all quantityInSet component units");
         var detailCalls = setHandler.DetailCalls;
         var restoredCompletion = new PrimeSetCompletion(setMarket, setHttp, Path.Combine(temp, "prime-set-components.json"));
         await restoredCompletion.AnalyzeAsync([
@@ -914,6 +950,7 @@ sealed class PrimeSetFeedHandler : HttpMessageHandler
         else if (uri.EndsWith("/v2/items/example_prime_blueprint")) { DetailCalls++; json = "{\"data\":{\"quantityInSet\":1}}"; }
         else if (uri.EndsWith("/v2/items/example_prime_blade")) { DetailCalls++; json = "{\"data\":{\"quantityInSet\":2}}"; }
         else if (uri.EndsWith("/orders/item/example_prime_set")) json = "{\"data\":[{\"id\":\"s1\",\"type\":\"sell\",\"platinum\":50,\"quantity\":1,\"user\":{\"ingameName\":\"SetSeller\",\"status\":\"ingame\"}}]}";
+        else if (uri.EndsWith("/orders/item/example_prime_blueprint")) json = "{\"data\":[{\"id\":\"a1\",\"type\":\"sell\",\"platinum\":11,\"quantity\":1,\"user\":{\"ingameName\":\"BlueprintSeller\",\"status\":\"ingame\"}}]}";
         else if (uri.EndsWith("/orders/item/example_prime_blade")) json = "{\"data\":[{\"id\":\"b1\",\"type\":\"sell\",\"platinum\":7,\"quantity\":2,\"user\":{\"ingameName\":\"BladeSeller\",\"status\":\"ingame\"}}]}";
         else json = "{\"data\":[]}";
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });

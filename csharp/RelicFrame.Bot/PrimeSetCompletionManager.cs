@@ -118,13 +118,15 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
                     (name, tier) => market.IsBookFresh(name + " Relic", TimeSpan.FromMinutes(10))
                         ? market.Match(name, tier.ToString(), true, relic: true, excludedSellerSlug: personalMarket.ExcludedSellerSlug)
                         : new OrderMatch([], false));
-            await RenderAsync(channel, rows, null, force);
-            status = $"ready; {rows.Count} one-component completions";
+            var comparisons = await completion.ComparePartsAndSetsAsync(inventory, personalMarket.ExcludedSellerSlug, ct);
+            await RenderAsync(channel, rows, null, force, comparisons);
+            status = $"ready; {rows.Count} one-component completions; {comparisons.Count} part/set comparisons";
         }
         finally { gate.Release(); }
     }
 
-    private async Task RenderAsync(ITextChannel channel, IReadOnlyList<PrimeSetOpportunity> opportunities, string? notice, bool force)
+    private async Task RenderAsync(ITextChannel channel, IReadOnlyList<PrimeSetOpportunity> opportunities, string? notice, bool force,
+        IReadOnlyList<PrimeSetSaleComparison>? comparisons = null)
     {
         var pages = Math.Max(1, (opportunities.Count + PageSize - 1) / PageSize); state.Page = Math.Clamp(state.Page, 1, pages);
         var rows = opportunities.Skip((state.Page - 1) * PageSize).Take(PageSize).Select((row, index) =>
@@ -136,6 +138,14 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
             : string.Join('\n', rows));
         description += "\n\nCompletion profit = estimated full-set sell value minus the current cost of the missing quantity. This board does not auto-buy, auto-craft or list completed sets.";
         if (opportunities.Count > 0 && state.Page == 1) description += "\nCheapest relic = one online-seller relic, any refinement. Drops are not guaranteed; opening/traces are not included in completion profit.";
+        if (state.Page == 1 && comparisons is { Count: > 0 })
+        {
+            var comparisonLines = comparisons.Take(5).Select(row =>
+                $"**{row.SetName}** · {(row.Advantage > 0 ? "set" : row.Advantage < 0 ? "parts" : "tie")} by **{Math.Abs(row.Advantage)}p** " +
+                $"(set {row.SetValue}p{(row.Complete ? "" : $" − missing {row.MissingCost}p")} vs owned parts {row.OwnedPartsValue}p)");
+            description += "\n\n**Part versus set · biggest differences**\n" + string.Join('\n', comparisonLines)
+                + "\nThese are asking-price estimates, not confirmed sales. Unpriced or stale components are omitted.";
+        }
         var embed = new EmbedBuilder().WithTitle("Prime-set completion profit").WithDescription(description.Length <= 4096 ? description : description[..4093] + "…")
             .WithColor(new Color(0x9B59B6u)).WithFooter($"Page {state.Page}/{pages} · {opportunities.Count} one-component opportunities · refreshes every 15 minutes").Build();
         var components = new ComponentBuilder().WithButton("Previous", "prime-set-completion:prev", ButtonStyle.Secondary, disabled: state.Page <= 1)

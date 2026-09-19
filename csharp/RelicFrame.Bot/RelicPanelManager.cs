@@ -318,11 +318,12 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             .AddField("Risk score · 0–100", "Lower is safer. The heuristic adds up to 40 points for loss probability, up to 25 for worst-case loss severity, 15 for a refinement fallback, 10 for a lone/outlier listing, and 10 when a listing is not immediately actionable. It is a quick comparison aid, not a guarantee.")
             .AddField("Plat per Trace", "Expected reward value divided by traces spent from Intact: 25 Exceptional, 50 Flawless, or 100 Radiant. It measures trace efficiency and does not subtract the relic's purchase price.")
             .AddField("Ducat farming", "Expected ducats weights every reward's ducat value by its drop chance. Ducats per platinum compares that expected ducat return with the relic cost; higher is better.")
+            .AddField("Open, sell or radshare", "**Show drops** compares the selected relic's current exact-refinement sell ask with reward EV. Its 1–4-player lines show the chance of at least one rare reward and the expected best reward **one player** may choose from the squad's independent drops. This is not total group revenue or guaranteed profit; missing/stale reward prices suppress the comparison.")
             .AddField("What each channel sorts", "**Best Overall** combines expected profit, capped ROI, win chance and risk. **Expected Profit** sorts average platinum gain. **Best ROI** sorts raw percentage return; lower risk and higher profit break ties. **Best Win Chance** sorts the probability that one opening finishes above total cost, highest first. **Best Plat/Trace** favors value per trace. **Cheapest** sorts acquisition cost. **Best Ducat Farming** favors expected ducats per platinum. **Guaranteed Profit** excludes every relic whose worst reward is not profitable, then sorts worst-case profit. **Lowest Risk** sorts risk upward.")
             .AddField("Using the controls", "Use **Prev/Next** to change pages, choose a relic, then **Show drops** or **/w seller**. In **#prime-part-prices**, choose a part to see its price and every source relic. Drop rows sort Rare → Uncommon → Common, then price and name. Controls reply privately. Managers can change ranking filters with `/rf-panel config`.")
             .AddField("Freshness and efficiency", "Warframe.market books reconcile continuously across five minutes. The first REST pass has priority over Riven scanning. Full snapshots are shared for 10 seconds (1 during bootstrap), **Show drops** reads only six books, and Prime selections acknowledge before looking up one part. Controls run outside the gateway task, `/rf-status` performs no full snapshot, and three command workers keep requests moving. THE LIST writes only when visible results change. WebSocket updates help but cannot replace REST or API limits.")
             .WithFooter("Market asks can change or disappear. RelicFrame never contacts sellers or performs trades.").Build();
-        const string guideRevision = "the-list-guide-2026-09-07-sort-audit-v10";
+        const string guideRevision = "the-list-guide-2026-09-19-open-sell-squad-v11";
         if (saved.MessageId != 0 && saved.RenderHash == guideRevision && !saved.CleanupPending) return;
         var old = saved.MessageId == 0 ? null : await channel.GetMessageAsync(saved.MessageId) as IUserMessage;
         if (old is null) { var sent = await channel.SendMessageAsync(embed: embed, allowedMentions: AllowedMentions.None); saved.MessageId = sent.Id; }
@@ -450,7 +451,20 @@ internal sealed class RelicPanelManager : IAsyncDisposable
                     ? $" (online {Price(online)}p · recent median {Price(recent)}p)" : "";
                 return $"**{reward.RewardName}** · {rarity} · {Relic.Chance(tier, reward.Rarity):0.##}% · {Price(price)}p{basis} · {availability}";
             });
-            var embed = new EmbedBuilder().WithTitle($"📦 {relicName} drops · {tier}").WithDescription(string.Join('\n', lines))
+            var freshRewards = relic.Rewards.All(reward => market.IsBookFresh(reward.RewardName, TimeSpan.FromMinutes(30)));
+            var relicMatch = market.IsBookFresh(relicName + " Relic", TimeSpan.FromMinutes(30))
+                ? market.Match(relicName, tier.ToString(), true, relic: true) : new OrderMatch([], false);
+            var relicAsk = relicMatch.SubtypeMatched ? relicMatch.Best?.Price : null;
+            var squad = freshRewards ? RelicOpeningDecision.Compare(relic, tier,
+                rewardPrices.ToDictionary(row => row.Key, row => row.Value.Price, StringComparer.OrdinalIgnoreCase), relicAsk) : [];
+            var comparison = squad.Count == 0 ? "\n\nOpening-versus-selling unavailable until all rewards have fresh prices."
+                : "\n\n**Open or sell this relic?** " + (relicAsk.HasValue ? $"Current {tier} relic ask {relicAsk:0.#}p. " : "Relic sale quote unavailable. ")
+                  + "Squad figures are the expected best reward selectable by **one player**; each squad member consumes their own relic.\n"
+                  + string.Join('\n', squad.Select(row =>
+                      $"{row.Players} player{(row.Players == 1 ? "" : "s")} · best-choice EV {row.BestRewardEv:0.#}p · rare visible {row.RareChancePct:0.##}%" +
+                      (row.NetVersusSelling is { } net ? $" · vs selling {net:+0.#;-0.#;0}p" : "")))
+                  + "\nAsks are not confirmed sales; this excludes loading time, Traces, and non-Prime extras.";
+            var embed = new EmbedBuilder().WithTitle($"📦 {relicName} drops · {tier}").WithDescription(string.Join('\n', lines) + comparison)
                 .WithColor(new Color(0x5865F2)).WithFooter($"Vaulted: online floor. Unvaulted: stabilized online/recent-visible estimate. Qualification requires a Vaulted reward worth at least {VaultedRewardFloor:0}p.").Build();
             await interaction.FollowupAsync(embed: embed, ephemeral: true, allowedMentions: AllowedMentions.None); return;
         }
