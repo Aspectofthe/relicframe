@@ -4,6 +4,8 @@
 
 The executable is C#/.NET 10, using Discord.Net 3.20.1. Runtime calculations do not run Python or call OpenAI. Riven screenshots use local YOLO/PaddleOCR plus Tesseract, with an additional Windows OCR pass when available; visible Trade Chat uses local Tesseract. Companion features are intentionally absent.
 
+**MOD ECONOMY / #maxed-mod-profit** compares R0 purchase prices with liquid R10 resale estimates and exact Endo/Credit upgrade costs. Buttons sort by activity-weighted gain, platinum per 1,000 Endo, or reported max-rank sales/day. Optional `RELICFRAME_ENDO_COST_PLAT_PER_1000` and `RELICFRAME_CREDIT_COST_PLAT_PER_100K` convert gross gains into resource-adjusted net estimates. See [setup](SETUP_GUIDE.md#maxed-mod-profit) for the price basis and costs.
+
 ## Implemented and tested offline
 
 - Relic CSV loading, four refinement tiers, expected/worst-case returns, odds, trace efficiency, ducat efficiency, quantity-aware purchases, exact distributions and labelled Monte Carlo estimates.

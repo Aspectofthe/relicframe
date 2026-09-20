@@ -112,6 +112,19 @@ var ayaRanking = new AyaValueRow[]
     new("Neo C3 Relic", 1, 50, null, null, null, null),
     new("Axi D4 Relic", 1, null, null, null, null, null)
 };
+Assert(MaxedModProfit.UpgradeCost(["legendary", "mod"], 10) == new ModUpgradeCost(40920, 1976436) &&
+    MaxedModProfit.UpgradeCost(["rare", "mod"], 10) == new ModUpgradeCost(30690, 1482327) &&
+    MaxedModProfit.UpgradeCost(["uncommon"], 10) == new ModUpgradeCost(20460, 988218) &&
+    MaxedModProfit.UpgradeCost(["common"], 10) == new ModUpgradeCost(10230, 494109) &&
+    MaxedModProfit.UpgradeCost(["unknown"], 10) is null, "mod fusion costs match rarity-specific R10 totals; unknown rarities are excluded");
+var modProfit = MaxedModProfit.Evaluate("Primed test", 20, 200, new(150, 5, 20), new(40920, 1976436),
+    DateTimeOffset.UtcNow, 1, 1);
+Assert(modProfit is not null && modProfit.SellMax == 150 && modProfit.Uplift == 130 &&
+    Math.Abs(modProfit.NetProfit!.Value - 69.31564) < .00001,
+    "mod resale is capped at historical median and subtracts both upgrade resource costs");
+Assert(MaxedModProfit.Evaluate("Sparse", 20, 200, new(150, .5, 20), new(40920, 1976436), DateTimeOffset.UtcNow, null, null) is null &&
+    MaxedModProfit.Evaluate("No buy", null, 200, new(150, 5, 20), new(40920, 1976436), DateTimeOffset.UtcNow, null, null) is null,
+    "maxed-mod ranking excludes thin activity and missing R0 prices");
 Assert(AyaProfit.Sort(ayaRanking, AyaProfit.PrimeParts).Select(row => row.RelicName)
         .SequenceEqual(["Lith A1 Relic", "Meso B2 Relic", "Axi D4 Relic", "Neo C3 Relic"]),
     "Aya Prime-part sort uses reward EV and puts unknown returns below priced rows");

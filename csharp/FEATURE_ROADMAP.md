@@ -28,7 +28,7 @@ This is the implementation tracker for the requested platinum-making features. A
 | Arcane profit board | Partial | Arcane collection EV, quick-sale ordering and rank-separated market estimates exist; acquisition-location profit/hour does not. |
 | Vosfor calculator | Implemented | Dissolve-versus-sell and pack EV already exist; values remain estimated asks. |
 | Mod farm profitability | Not yet | Needs exact drop tables, activity time and volume-aware sell-through. |
-| Maxed-mod profit | Not yet | Needs rank-specific prices plus precise Endo/Credit upgrade costs. |
+| Maxed-mod profit | Implemented | `#maxed-mod-profit` compares R0 acquisition asks with R10 asks capped by 30-day R10 medians, requires >=1 reported sale/day and >=3 reporting days, and displays exact rarity-based Endo/Credit fusion costs. Sorts by activity-weighted gain, return per 1k Endo or sales/day. Net upgrade margin uses configurable Endo/Credit opportunity costs; trade tax remains excluded. |
 | Riven appraisal and desired rolls | Implemented | Local OCR, comparable asks, roll grading and desired-roll guidance. |
 | Riven flip finder | Partial | Existing finder; more confirmed-sale and liquidity validation needed. |
 | Veiled Riven economics | Not yet | Needs category-specific reveal probabilities and net sell values. |

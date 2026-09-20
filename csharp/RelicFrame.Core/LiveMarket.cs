@@ -303,6 +303,9 @@ public sealed class LiveMarket : IAsyncDisposable
     public MarketCatalogItem? CatalogItem(string itemId) => catalogById.GetValueOrDefault(itemId);
     public IReadOnlyList<string> PrimeSetNames => primeSetNames;
     public IReadOnlyList<MarketCatalogItem> ArcaneItems => arcaneItems;
+    public IReadOnlyList<MarketCatalogItem> RankTenMods => catalogById.Values
+        .Where(item => item.MaxRank == 10 && item.Tags.Contains("mod", StringComparer.OrdinalIgnoreCase))
+        .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToArray();
     public bool RegisterBook(string name)
     {
         var slug = Resolve(name); if (slug is null) return false;

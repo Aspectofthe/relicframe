@@ -68,6 +68,12 @@ chmod +x csharp/run-bot.sh
 
 The launcher prompts for the same token and server ID. It stores them in owner-only mode-`600` files inside the ignored `csharp/runtime` directory. Use `--forget-credentials` to replace them or `--no-build` after a successful Release build.
 
+### Maxed-mod profit
+
+The bot creates **MOD ECONOMY / #maxed-mod-profit** for tradeable rank-10 mods. It compares R0 purchase asks with max-rank resale estimates, shows Endo/Credit upgrade costs and reported R10 sales/day, and offers best-return, per-1k-Endo and sales/day sorts. Prices must be fresh and R10 activity must average at least one reported sale/day over 30 days with at least three reporting days. Its default ranking is gross gain multiplied by `min(1, sales/day / 5)`.
+
+For estimated net profit, set both `RELICFRAME_ENDO_COST_PLAT_PER_1000` and `RELICFRAME_CREDIT_COST_PLAT_PER_100K` to your personal resource opportunity costs, then restart. Without those values, it shows gross resale gain and exact resource costs separately. Trade taxes are excluded. Statistics are cached for six hours, and additional requests use the existing shared limiter after market bootstrap.
+
 ### Windows OCR
 
 On Windows, Riven screenshots also use the Windows OCR engine used by PowerToys Text Extractor. PowerToys installation is unnecessary. This runs locally through the built-in Windows PowerShell 5.1 bridge, passes images in memory, and needs an installed English Windows OCR language pack. If unavailable or a pass fails, the other local OCR engines continue. Set `RELICFRAME_WINDOWS_OCR=0` to disable this extra pass. See [Microsoft's OCR language-pack instructions](https://learn.microsoft.com/en-us/windows/powertoys/text-extractor#supported-languages) if the bot reports a missing pack. Restart the bot after installing a pack.
