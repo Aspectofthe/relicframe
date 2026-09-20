@@ -120,7 +120,15 @@ Never share Warframe.market tokens between users. Each installation keeps its pr
 
 ### Set the private-board owner on each installation
 
-The button message **“This private board belongs to its configured owner”** means the clicking Discord user ID does not match the bot's Personal Market owner. Use Discord **User Settings > Advanced > Developer Mode**, then right-click your own profile and **Copy User ID**. Set `RELICFRAME_PERSONAL_USER_ID` to that numeric ID before starting the bot, or put `"DiscordUserId": 123456789012345678` in `<repo>/csharp/runtime/personal_market_settings.json`. For example, in the PowerShell window used to launch the bot: `$env:RELICFRAME_PERSONAL_USER_ID = '123456789012345678'`. The environment variable wins if both are set; if neither is set, the **Discord server owner** is used. Prime Set Completion uses the same owner. Restart the bot after changing the ID; startup configures the boards again. Do not copy another person's `csharp/runtime/` directory when setting up a separate installation: it contains their owner setting, board IDs, inventory and listing state. If the old owner already had access to an existing private channel, review its Discord permission overwrites manually; changing the configured ID does not remove that old overwrite.
+The button message **“This private board belongs to its configured owner”** means the clicking Discord user ID does not match the bot's Personal Market owner. Use Discord **User Settings > Advanced > Developer Mode**, then right-click your own profile and **Copy User ID**. Set `RELICFRAME_PERSONAL_USER_ID` to that numeric ID before starting the bot. For example, in the PowerShell window used to launch the bot: `$env:RELICFRAME_PERSONAL_USER_ID = '123456789012345678'`. Alternatively, create `<repo>/csharp/runtime/personal_market_settings.json` yourself with this complete content, replacing the example ID:
+
+```json
+{ "DiscordUserId": 123456789012345678 }
+```
+
+The `csharp/runtime/` directory is Git-ignored and may not exist in a fresh GitHub download until the launcher runs; neither that settings file nor any AlecaFrame token file is included in the repository. The environment variable wins if both are set; if neither is set, the **Discord server owner** is used. Prime Set Completion uses the same owner. Restart the bot after changing the ID; startup configures the boards again. Do not copy another person's `csharp/runtime/` directory when setting up a separate installation: it contains their owner setting, board IDs, inventory and listing state. If the old owner already had access to an existing private channel, review its Discord permission overwrites manually; changing the configured ID does not remove that old overwrite.
+
+An AlecaFrame public token is **optional** and only enables its completed-trade feed; it is not needed to open the private board or read a WFHelper/manual inventory file. Do not create `aleca-public-token.txt` if you do not use that integration. A separate, owner-specific Warframe.market token is required only for authenticated listing changes; keep auto-publishing paused until it is configured and tested.
 
 ### Reuse another app's inventory snapshot
 
