@@ -118,6 +118,46 @@ Personal Market is not required for the public relic, world-state, Arcane, Prime
 
 Never share Warframe.market tokens between users. Each installation keeps its private inventory, trade history, and authenticated listing operations local.
 
+### Set the private-board owner on each installation
+
+The button message **“This private board belongs to its configured owner”** means the clicking Discord user ID does not match the bot's Personal Market owner. Use Discord **User Settings > Advanced > Developer Mode**, then right-click your own profile and **Copy User ID**. Set `RELICFRAME_PERSONAL_USER_ID` to that numeric ID before starting the bot, or put `"DiscordUserId": 123456789012345678` in `<repo>/csharp/runtime/personal_market_settings.json`. For example, in the PowerShell window used to launch the bot: `$env:RELICFRAME_PERSONAL_USER_ID = '123456789012345678'`. The environment variable wins if both are set; if neither is set, the **Discord server owner** is used. Prime Set Completion uses the same owner. Restart the bot after changing the ID; startup configures the boards again. Do not copy another person's `csharp/runtime/` directory when setting up a separate installation: it contains their owner setting, board IDs, inventory and listing state. If the old owner already had access to an existing private channel, review its Discord permission overwrites manually; changing the configured ID does not remove that old overwrite.
+
+### Reuse another app's inventory snapshot
+
+RelicFrame reads a **local snapshot file**, not another app's account session or a live inventory API. [WFHelper's inventory setup](https://github.com/WFHelper/wfhelper/blob/main/docs/features/getting-started.md#choose-an-inventory-source) can use its helper-generated `inventory.json`, a manually imported `inventory.json`, or AlecaFrame's `lastData.dat`. Point `RELICFRAME_PRIME_INVENTORY_JSON` at the actual file that your chosen source refreshes, not WFHelper's settings/state file or a Warframe.market export.
+
+| File | Usual location |
+| --- | --- |
+| RelicFrame owner/settings | `<repo>/csharp/runtime/personal_market_settings.json` (or `RELICFRAME_RUNTIME_DIR/personal_market_settings.json` if the runtime was moved) |
+| WFHelper helper snapshot, Windows | `%APPDATA%\WFHelper\api-helper\inventory.json` |
+| WFHelper helper snapshot, Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/WFHelper/api-helper/inventory.json` |
+| AlecaFrame cache, Windows | `%LOCALAPPDATA%\AlecaFrame\lastData.dat` |
+| Manual WFHelper JSON import | Wherever you selected or saved that file; it is not necessarily in WFHelper's app-data directory |
+
+These WFHelper paths are for its normal app-data directory; a custom `WFHELPER_USER_DATA` moves its helper snapshot under that directory instead. Check that the file exists and has a recent modification time. On Windows, RelicFrame already discovers AlecaFrame's cache automatically when no inventory override is set.
+
+Set the override **before starting** the bot (use an absolute path; quote paths with spaces):
+
+```powershell
+$env:RELICFRAME_PRIME_INVENTORY_JSON = 'C:\path\to\inventory.json'
+.\csharp\run-bot.cmd
+```
+
+```bash
+export RELICFRAME_PRIME_INVENTORY_JSON='/path/to/inventory.json'
+./csharp/run-bot.sh
+```
+
+The JSON must contain `Recipes` and/or `MiscItems` arrays with `ItemType` and `ItemCount` rows, or be an `InventoryJson` wrapper containing that data. A flat list of item names and quantities is also accepted, for example `[ { "itemName": "Braton Prime Receiver", "quantity": 2 } ]`. WFHelper's displayed inventory, prices, and internal cache state are **not** interchangeable with that file. If another app exports a different schema, convert it to one of these formats first; RelicFrame does not import arbitrary app databases.
+
+Verify the file before enabling automatic listings:
+
+```powershell
+dotnet csharp/RelicFrame.Bot/bin/Release/net10.0/RelicFrame.Bot.dll --profile-inventory 'C:\path\to\inventory.json'
+```
+
+This prints row/unit counts without item names. A zero count can mean the file is empty, stale, or incompatible; check its modification time and compare a few owned quantities in the Personal Market board. On Linux, use the same diagnostic with the Linux file path. A copied snapshot stays stale until you copy it again; a mounted or synchronized file updates only when its source app writes a new snapshot. WFHelper's own [automatic inventory refresh](https://github.com/WFHelper/wfhelper/blob/main/docs/features/getting-started.md#choose-an-inventory-source) has a cooldown, while manually imported files require a fresh import. After a trade, wait for the source snapshot to update (or use the optional AlecaFrame trade-history integration described in the README), then sync listings. Keep automatic publishing paused while testing an unfamiliar source, and let only one app manage the same Warframe.market listings to avoid conflicting edits.
+
 ## 8. Updating and troubleshooting
 
 Stop the running bot, update the repository, and run the normal launcher again so it rebuilds before connecting. Useful first checks are:
