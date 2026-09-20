@@ -71,8 +71,12 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         this.bot = bot; this.market = market; this.http = http; this.targetGuild = targetGuild;
         var settingsPath = Path.Combine(runtime, "personal_market_settings.json");
         PersonalMarketSettings settings;
-        try { settings = File.Exists(settingsPath) ? Json.Read<PersonalMarketSettings>(settingsPath) : new(); }
-        catch (Exception e) when (e is IOException or System.Text.Json.JsonException) { settings = new(); status = "settings unreadable; environment/defaults used"; }
+        try
+        {
+            if (!File.Exists(settingsPath)) Json.WriteAtomic(settingsPath, new PersonalMarketSettings());
+            settings = Json.Read<PersonalMarketSettings>(settingsPath);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { settings = new(); status = "settings unreadable; environment/defaults used"; }
         configuredOwner = ulong.TryParse(Environment.GetEnvironmentVariable("RELICFRAME_PERSONAL_USER_ID"), out var owner) ? owner : settings.DiscordUserId;
         var configuredInventory = Environment.GetEnvironmentVariable("RELICFRAME_PRIME_INVENTORY_JSON");
         var localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);

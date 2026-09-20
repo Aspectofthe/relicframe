@@ -15,7 +15,7 @@ For the current C# bot, select the **`csharp-rewrite` branch** on GitHub before 
 | Immediate AlecaFrame completed-trade reconciliation | An optional AlecaFrame **Trades-only public token**; omit this entirely if AlecaFrame is not used |
 | Capturing visible Trade Chat on Linux | Optional desktop capture packages and configuration in **Linux OCR** below; not needed for Discord image attachments |
 
-Public relic, world, Prime, Arcane, mod and Riven boards do **not** require AlecaFrame, WFHelper, a Warframe.market login, OpenAI, or another cloud AI key. `csharp/runtime/` and private token/settings files are intentionally **absent from GitHub**; each installer creates their own local configuration. Never copy a friend's runtime directory or run two instances with the same bot token in the same server.
+Public relic, world, Prime, Arcane, mod and Riven boards do **not** require AlecaFrame, WFHelper, a Warframe.market login, OpenAI, or another cloud AI key. The safe templates [`csharp/personal_market_settings.example.json`](personal_market_settings.example.json) and [`csharp/prime_inventory.example.json`](prime_inventory.example.json) **are included on GitHub**. `csharp/runtime/` and private credentials/state are intentionally excluded; each installer creates their own local configuration. Never copy a friend's runtime directory or run two instances with the same bot token in the same server.
 
 ## 1. Install the prerequisites
 
@@ -141,13 +141,24 @@ Never share Warframe.market tokens between users. Each installation keeps its pr
 
 ### Set the private-board owner on each installation
 
-The button message **“This private board belongs to its configured owner”** means the clicking Discord user ID does not match the bot's Personal Market owner. Use Discord **User Settings > Advanced > Developer Mode**, then right-click your own profile and **Copy User ID**. Set `RELICFRAME_PERSONAL_USER_ID` to that numeric ID before starting the bot. For example, in the PowerShell window used to launch the bot: `$env:RELICFRAME_PERSONAL_USER_ID = '123456789012345678'`. Alternatively, create `<repo>/csharp/runtime/personal_market_settings.json` yourself with this complete content, replacing the example ID:
+The button message **“This private board belongs to its configured owner”** means the clicking Discord user ID does not match the bot's Personal Market owner. Use Discord **User Settings > Advanced > Developer Mode**, then right-click your own profile and **Copy User ID**. Set `RELICFRAME_PERSONAL_USER_ID` to that numeric ID before starting the bot. For example, in the PowerShell window used to launch the bot: `$env:RELICFRAME_PERSONAL_USER_ID = '123456789012345678'`. Alternatively, edit the bot-generated `<repo>/csharp/runtime/personal_market_settings.json` after its first launch (or copy the tracked example there before launching). Use `discord_user_id` with underscores, replacing the example ID:
 
 ```json
-{ "DiscordUserId": 123456789012345678 }
+{ "discord_user_id": 123456789012345678 }
 ```
 
-The `csharp/runtime/` directory is Git-ignored and may not exist in a fresh GitHub download until the launcher runs; neither that settings file nor any AlecaFrame token file is included in the repository. The environment variable wins if both are set; if neither is set, the **Discord server owner** is used. Prime Set Completion uses the same owner. Restart the bot after changing the ID; startup configures the boards again. Do not copy another person's `csharp/runtime/` directory when setting up a separate installation: it contains their owner setting, board IDs, inventory and listing state. If the old owner already had access to an existing private channel, review its Discord permission overwrites manually; changing the configured ID does not remove that old overwrite.
+The `csharp/runtime/` directory is Git-ignored and may not exist in a fresh GitHub download until the launcher runs. The bot creates the default `personal_market_settings.json` there on first launch; its example is tracked at `csharp/personal_market_settings.example.json`. Neither an AlecaFrame nor a Warframe.market token file is included in the repository or created automatically. The environment variable wins if both are set; if neither is set, the **Discord server owner** is used. Prime Set Completion uses the same owner. Restart the bot after changing the ID; startup configures the boards again. Do not copy another person's `csharp/runtime/` directory when setting up a separate installation: it contains their owner setting, board IDs, inventory and listing state. If the old owner already had access to an existing private channel, review its Discord permission overwrites manually; changing the configured ID does not remove that old overwrite.
+
+| Setup file | Availability |
+| --- | --- |
+| `csharp/personal_market_settings.example.json` | Included on GitHub; documents the editable settings and safe defaults. |
+| `csharp/prime_inventory.example.json` | Included on GitHub as an **empty** manual-inventory template; it does not represent owned items. |
+| `csharp/runtime/personal_market_settings.json` | Generated with safe defaults on first bot launch; edit this file, not the example. Use snake_case keys. |
+| `csharp/runtime/prime_inventory.json` | Empty fallback created during Personal Market setup only when no other inventory source is selected. Replace or override it with a real snapshot for owned-item views. |
+| Windows `csharp/runtime/launch-credentials.xml`; Linux `launch-token` and `launch-guild-id` | Created by the launcher after it asks for the Discord token/server ID. Never copy between users. |
+| Warframe.market token (`RELICFRAME_WFM_TOKEN` or `RELICFRAME_WFM_TOKEN_FILE`) | **Not shipped or auto-created.** Used only for authenticated listing writes. Without an override, the bot checks AlecaFrame's local `WFMarketToken.tk` on Windows or `csharp/runtime/wfm-token.txt` on Linux. |
+| `csharp/runtime/aleca-public-token.txt` | **Not shipped or auto-created.** Optional owner's Trades-only public token for AlecaFrame completed-trade polling. |
+| Other `csharp/runtime/*.json` files | Bot-generated caches, board IDs and history; not setup templates. |
 
 An AlecaFrame public token is **optional** and only enables its completed-trade feed; it is not needed to open the private board or read a WFHelper/manual inventory file. Do not create `aleca-public-token.txt` if you do not use that integration. A separate, owner-specific Warframe.market token is required only for authenticated listing changes; keep auto-publishing paused until it is configured and tested.
 
@@ -159,7 +170,7 @@ RelicFrame reads a **local snapshot file**, not another app's account session or
 
 | File | Usual location |
 | --- | --- |
-| RelicFrame owner/settings | `<repo>/csharp/runtime/personal_market_settings.json` (or `RELICFRAME_RUNTIME_DIR/personal_market_settings.json` if the runtime was moved) |
+| RelicFrame owner/settings | `<repo>/csharp/runtime/personal_market_settings.json`, generated on first bot launch (or `RELICFRAME_RUNTIME_DIR/personal_market_settings.json` if the runtime was moved); safe template: `csharp/personal_market_settings.example.json` |
 | WFHelper helper snapshot, Windows | `%APPDATA%\WFHelper\api-helper\inventory.json` |
 | WFHelper helper snapshot, Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/WFHelper/api-helper/inventory.json` |
 | AlecaFrame cache, Windows | `%LOCALAPPDATA%\AlecaFrame\lastData.dat` |
@@ -203,7 +214,7 @@ If commands do not appear, verify the invite included `applications.commands`, t
 | Symptom | Check first |
 | --- | --- |
 | “This private board belongs to its configured owner” | The clicking user's Discord ID versus `RELICFRAME_PERSONAL_USER_ID` or `DiscordUserId`; the fallback is the server owner. Restart after changing it. |
-| No `personal_market_settings.json` or AlecaFrame token file in a GitHub download | Expected: both are optional, local, Git-ignored files. Create only the settings file you need; never use another person's tokens. |
+| No `personal_market_settings.json` or AlecaFrame token file in a GitHub download | Expected: live runtime files are Git-ignored. The bot creates default settings on first launch; the example settings and empty inventory templates are included in `csharp/`. Token files are never generated; use only your own tokens if needed. |
 | Personal Market has no owned items | Check the selected inventory file exists, contains compatible rows, has refreshed since the last trade, and reports nonzero rows with `--profile-inventory`. A new installation has no private inventory snapshot. |
 | Listing action says token missing | Viewing the board needs no Warframe.market token; authenticated listing writes do. Keep auto-publishing paused until the owner's token is supplied. |
 | `dotnet` not found or wrong version | Install the .NET **10 SDK**, reopen the terminal, and run `dotnet --version`; the Windows launcher can also use a checked-in-path `.tools/dotnet` installation if present locally. |
