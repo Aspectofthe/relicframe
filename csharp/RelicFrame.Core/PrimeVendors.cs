@@ -9,6 +9,34 @@ public sealed record UpcomingResurgence(DateTimeOffset StartsAt, DateTimeOffset 
 public sealed record PrimeVendorSnapshot(DateTimeOffset SourceTime, VendorRotation? Aya, VendorRotation? Baro,
     IReadOnlyList<string> ReturningPrimes, DateTimeOffset? NextBaroAt, UpcomingResurgence? NextAya);
 public sealed record HistoricalSaleSummary(double? MedianR0, double SalesPerDay, int ReportingDays);
+public sealed record BaroValueRow(string Name, int Ducats, int Credits, HistoricalSaleSummary R0,
+    HistoricalSaleSummary? MaxRank);
+public static class BaroEconomy
+{
+    public const string Sales = "sales";
+    public const string Ducats = "ducats";
+    public const string Credits = "credits";
+
+    public static double? NetValue(BaroValueRow row, double? platinumPerDucat, double? platinumPer100kCredits)
+        => row.R0.MedianR0 is { } value && platinumPerDucat is { } ducatCost && platinumPer100kCredits is { } creditCost
+            ? value - row.Ducats * ducatCost - row.Credits / 100000.0 * creditCost : null;
+
+    public static IReadOnlyList<BaroValueRow> Sort(IEnumerable<BaroValueRow> rows, string mode,
+        double? platinumPerDucat, double? platinumPer100kCredits)
+    {
+        double? Return(BaroValueRow row) => NetValue(row, platinumPerDucat, platinumPer100kCredits) ?? row.R0.MedianR0;
+        double? Basis(BaroValueRow row) => mode switch
+        {
+            Ducats when row.Ducats > 0 => Return(row) / row.Ducats * 100,
+            Credits when row.Credits > 0 => Return(row) / row.Credits * 100000,
+            Sales => row.R0.MedianR0.HasValue ? row.R0.SalesPerDay : null,
+            _ => null
+        };
+        return rows.OrderByDescending(row => Basis(row).HasValue).ThenByDescending(row => Basis(row))
+            .ThenByDescending(row => row.R0.SalesPerDay)
+            .ThenBy(row => row.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+}
 public sealed record AyaValueRow(string RelicName, int AyaCost, double? DirectSellAsk, double? PrimePartEv,
     string? BestPrimePart, double? BestPrimePartAsk, double? RareChance);
 
@@ -130,8 +158,11 @@ public static class PrimeVendors
         => SalesBetween(rows, now.AddDays(-30), now, ranked);
 
     public static HistoricalSaleSummary SalesBetween(JsonElement rows, DateTimeOffset from, DateTimeOffset through, bool ranked)
+        => SalesAtRank(rows, from, through, ranked ? 0 : null);
+
+    public static HistoricalSaleSummary SalesAtRank(JsonElement rows, DateTimeOffset from, DateTimeOffset through, int? rank)
     {
-        var daily = rows.Rows().Where(row => !ranked || row.Get("mod_rank").Number() == 0)
+        var daily = rows.Rows().Where(row => rank is null || row.Get("mod_rank").Number() == rank)
             .Select(row => new { At = DateTimeOffset.TryParse(row.Get("datetime").Text(), CultureInfo.InvariantCulture,
                     DateTimeStyles.None, out var at) ? at : DateTimeOffset.MinValue,
                 Volume = Math.Max(0, row.Get("volume").Number() ?? 0), Price = row.Get("median").Number() })

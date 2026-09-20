@@ -169,7 +169,23 @@ using (var vendorStats = JsonDocument.Parse("[{\"datetime\":\"2026-09-18T12:00:0
     Assert(PrimeVendors.SalesBetween(vendorStats.RootElement, vendorNow.AddDays(-2), vendorNow, true).MedianR0 == 20 &&
         PrimeVendors.SalesBetween(vendorStats.RootElement, vendorNow.AddDays(-2), vendorNow, false).MedianR0 == 200,
         "post-visit time windows preserve rank-zero filtering and weighted median");
+    Assert(PrimeVendors.SalesAtRank(vendorStats.RootElement, vendorNow.AddDays(-2), vendorNow, 10).MedianR0 == 200,
+        "Baro max-rank medians do not mix with R0 sales");
 }
+var baroRanking = new BaroValueRow[]
+{
+    new("Fast", 500, 100000, new(30, 8, 20), new(120, 1, 10)),
+    new("Ducat-efficient", 100, 200000, new(40, 2, 20), null),
+    new("Credit-efficient", 500, 10000, new(30, 1, 20), null),
+    new("Unpriced", 10, 100, new(null, 0, 0), null)
+};
+Assert(BaroEconomy.Sort(baroRanking, BaroEconomy.Sales, null, null)[0].Name == "Fast" &&
+    BaroEconomy.Sort(baroRanking, BaroEconomy.Ducats, null, null)[0].Name == "Ducat-efficient" &&
+    BaroEconomy.Sort(baroRanking, BaroEconomy.Credits, null, null)[0].Name == "Credit-efficient",
+    "Baro sales, Ducat efficiency and Credit efficiency are independent sorts");
+Assert(BaroEconomy.NetValue(baroRanking[1], 0.1, 2) == 26 &&
+    BaroEconomy.Sort(baroRanking, BaroEconomy.Ducats, 0.1, 2).Last().Name == "Unpriced",
+    "Baro net profit subtracts both resource costs and leaves unknown prices last");
 Assert(RivenPricing.EndoValue(13, 0, 0) == 515 && RivenPricing.EndoValue(8, 8, 10) == 7753, "Riven dissolve Endo formula includes mastery, mod rank and rerolls");
 var relicFilterFixture = Path.Combine(Path.GetTempPath(), "relicframe-relic-filter-" + Guid.NewGuid().ToString("N") + ".csv");
 try

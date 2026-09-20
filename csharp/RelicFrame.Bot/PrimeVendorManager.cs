@@ -16,11 +16,16 @@ internal sealed record PrimeVendorBoardState
     public DateTimeOffset? AyaExpiresAt { get; set; }
     public DateTimeOffset? BaroExpiresAt { get; set; }
     public string AyaSort { get; set; } = AyaProfit.Overall;
+    public string BaroSort { get; set; } = BaroEconomy.Sales;
 }
 internal sealed record BaroSaleCache(DateTimeOffset CheckedAt, HistoricalSaleSummary Sales,
-    HistoricalSaleSummary? PostVisit = null, DateTimeOffset? VisitEndedAt = null);
+    HistoricalSaleSummary? PostVisit = null, DateTimeOffset? VisitEndedAt = null,
+    HistoricalSaleSummary? MaxRankSales = null);
 internal sealed record BaroVisitItem(string Slug, int Ducats, int Credits);
 internal sealed record BaroVisitRecord(DateTimeOffset EndsAt, BaroVisitItem[] Items);
+internal sealed record BaroBoardRow(VendorOffer Offer, HistoricalSaleSummary Sales,
+    HistoricalSaleSummary? MaxRankSales, HistoricalSaleSummary? PostVisit,
+    double? R0Ask, double? MaxRankAsk, int? MaxRank);
 
 internal sealed class PrimeVendorManager : IAsyncDisposable
 {
@@ -42,6 +47,8 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
     private Task? worker;
     private PrimeVendorSnapshot? latestAyaSnapshot;
     private AyaValueRow[] latestAyaRows = [];
+    private PrimeVendorSnapshot? latestBaroSnapshot;
+    private BaroBoardRow[] latestBaroRows = [];
     private string status = "stopped";
     public string Status => Volatile.Read(ref status);
 
@@ -211,43 +218,51 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
 
     private async Task DispatchButtonAsync(SocketMessageComponent interaction)
     {
-        if (interaction.GuildId != guildId || interaction.ChannelId != state.AyaChannelId ||
-            !interaction.Data.CustomId.StartsWith("aya-sort:", StringComparison.Ordinal)) return;
+        var aya = interaction.ChannelId == state.AyaChannelId && interaction.Data.CustomId.StartsWith("aya-sort:", StringComparison.Ordinal);
+        var baro = interaction.ChannelId == state.BaroChannelId && interaction.Data.CustomId.StartsWith("baro-sort:", StringComparison.Ordinal);
+        if (interaction.GuildId != guildId || (!aya && !baro)) return;
         await interaction.DeferAsync(ephemeral: true);
         _ = Task.Run(async () =>
         {
             try
             {
-                var mode = interaction.Data.CustomId["aya-sort:".Length..];
-                if (mode is not (AyaProfit.Overall or AyaProfit.PrimeParts or AyaProfit.RelicSale))
-                { await interaction.FollowupAsync("Unknown Aya sort.", ephemeral: true); return; }
+                var mode = interaction.Data.CustomId[(aya ? "aya-sort:" : "baro-sort:").Length..];
+                if (aya && mode is not (AyaProfit.Overall or AyaProfit.PrimeParts or AyaProfit.RelicSale) ||
+                    baro && mode is not (BaroEconomy.Sales or BaroEconomy.Ducats or BaroEconomy.Credits))
+                { await interaction.FollowupAsync("Unknown sort.", ephemeral: true); return; }
                 await gate.WaitAsync();
                 try
                 {
-                    state.AyaSort = mode; Save();
-                    var channel = bot.GetGuild(guildId)?.GetTextChannel(state.AyaChannelId);
-                    if (channel is null) throw new InvalidOperationException("Aya board channel unavailable.");
-                    await PublishAsync(channel, true, "Prime Resurgence · Aya planner",
-                        latestAyaSnapshot is { } snapshot ? AyaText(snapshot, latestAyaRows) : "Waiting for the current Varzia manifest and Prime-part prices.",
-                        CancellationToken.None);
+                    if (aya) state.AyaSort = mode; else state.BaroSort = mode;
+                    Save();
+                    var channel = bot.GetGuild(guildId)?.GetTextChannel(aya ? state.AyaChannelId : state.BaroChannelId);
+                    if (channel is null) throw new InvalidOperationException("Vendor board channel unavailable.");
+                    var body = aya
+                        ? latestAyaSnapshot is { } ayaSnapshot ? AyaText(ayaSnapshot, latestAyaRows) : "Waiting for the current Varzia manifest and Prime-part prices."
+                        : latestBaroSnapshot is { } baroSnapshot ? BaroText(baroSnapshot, latestBaroRows) : "Waiting for the current Baro manifest and market prices.";
+                    await PublishAsync(channel, aya, aya ? "Prime Resurgence · Aya planner" : "Baro · investment watchlist", body, CancellationToken.None);
                 }
                 finally { gate.Release(); }
-                await interaction.FollowupAsync("Aya ranking updated.", ephemeral: true);
+                await interaction.FollowupAsync("Ranking updated.", ephemeral: true);
             }
             catch (Exception error)
             {
-                Console.WriteLine($"[aya-sort] {error}");
-                try { if (interaction.HasResponded) await interaction.FollowupAsync("Could not update the Aya sort; the next refresh will retry.", ephemeral: true); }
-                catch (Exception replyError) { Console.WriteLine($"[aya-sort] response failed: {replyError.GetType().Name}"); }
+                Console.WriteLine($"[vendor-sort] {error}");
+                try { if (interaction.HasResponded) await interaction.FollowupAsync("Could not update the sort; the next refresh will retry.", ephemeral: true); }
+                catch (Exception replyError) { Console.WriteLine($"[vendor-sort] response failed: {replyError.GetType().Name}"); }
             }
         }, CancellationToken.None);
     }
 
     private async Task<string> BaroTextAsync(PrimeVendorSnapshot snapshot, CancellationToken ct)
     {
-        if (snapshot.Baro is not { } rotation) return "Baro is not currently active." +
-            (snapshot.NextBaroAt is { } next ? $" Next visit <t:{next.ToUnixTimeSeconds()}:R>." : "") +
-            " The next stock will be ranked when published; no previous stock is shown as current.";
+        if (snapshot.Baro is not { } rotation)
+        {
+            latestBaroSnapshot = snapshot; latestBaroRows = [];
+            return "Baro is not currently active." +
+                (snapshot.NextBaroAt is { } next ? $" Next visit <t:{next.ToUnixTimeSeconds()}:R>." : "") +
+                " The next stock will be ranked when published; no previous stock is shown as current.";
+        }
         var currentItems = rotation.Offers.Select(offer => market.ItemIdForName(offer.Name) is { } id && market.CatalogItem(id) is { } item
                 ? new BaroVisitItem(item.Slug, offer.Cost, offer.Credits) : null)
             .OfType<BaroVisitItem>().DistinctBy(item => item.Slug, StringComparer.Ordinal).ToArray();
@@ -260,8 +275,7 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
                 .OrderByDescending(visit => visit.EndsAt).Take(10).ToList();
             Json.WriteAtomic(visitsPath, visits);
         }
-        var rows = new List<(VendorOffer Offer, HistoricalSaleSummary Sales, HistoricalSaleSummary? PostVisit,
-            int? PreviousDucats, double? Ask)>();
+        var rows = new List<BaroBoardRow>();
         foreach (var offer in rotation.Offers)
         {
             var itemId = market.ItemIdForName(offer.Name);
@@ -270,7 +284,7 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
             var priorVisit = visits.Where(visit => visit.EndsAt < DateTimeOffset.UtcNow.AddDays(-3)
                     && visit.Items.Any(stock => stock.Slug == item.Slug))
                 .OrderByDescending(visit => visit.EndsAt).FirstOrDefault();
-            if (!sales.TryGetValue(item.Slug, out var cached) || DateTimeOffset.UtcNow - cached.CheckedAt >
+            if (!sales.TryGetValue(item.Slug, out var cached) || item.MaxRank is > 0 && cached.MaxRankSales is null || DateTimeOffset.UtcNow - cached.CheckedAt >
                 (cached.Sales.MedianR0.HasValue ? TimeSpan.FromHours(6) : TimeSpan.FromMinutes(15))
                 || cached.VisitEndedAt != priorVisit?.EndsAt)
             {
@@ -288,7 +302,8 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
                         if (after.ReportingDays >= 3) postVisit = after;
                     }
                     cached = new(DateTimeOffset.UtcNow, PrimeVendors.Sales(daily, DateTimeOffset.UtcNow, item.MaxRank is > 0),
-                        postVisit, priorVisit?.EndsAt);
+                        postVisit, priorVisit?.EndsAt,
+                        item.MaxRank is > 0 ? PrimeVendors.SalesAtRank(daily, DateTimeOffset.UtcNow.AddDays(-30), DateTimeOffset.UtcNow, item.MaxRank) : null);
                     sales[item.Slug] = cached;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -298,27 +313,54 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
             if (!market.IsBookFresh(offer.Name, TimeSpan.FromMinutes(30))) await market.EnsureBookAsync(offer.Name, ct);
             var ask = market.IsBookFresh(offer.Name, TimeSpan.FromMinutes(30))
                 ? (item.MaxRank is > 0 ? market.MatchRank(offer.Name, 0, true) : market.Match(offer.Name, null, true)).Best?.Price : null;
-            rows.Add((offer, cached.Sales, cached.PostVisit,
-                priorVisit?.Items.FirstOrDefault(stock => stock.Slug == item.Slug)?.Ducats, ask));
+            var maxAsk = item.MaxRank is > 0 && market.IsBookFresh(offer.Name, TimeSpan.FromMinutes(30))
+                ? market.MatchRank(offer.Name, item.MaxRank.Value, true).Best?.Price : null;
+            rows.Add(new(offer, cached.Sales, cached.MaxRankSales, cached.PostVisit, ask, maxAsk, item.MaxRank));
         }
         Json.WriteAtomic(salesPath, sales);
-        var costKnown = double.TryParse(Environment.GetEnvironmentVariable("RELICFRAME_DUCAT_COST_PLAT"),
-            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var ducatCost) && ducatCost >= 0;
-        var ranked = rows.Where(row => row.Sales.MedianR0.HasValue)
-            .OrderByDescending(row => costKnown ? (row.PostVisit?.MedianR0 ?? row.Sales.MedianR0!.Value) - row.Offer.Cost * ducatCost :
-                (row.PostVisit?.MedianR0 ?? row.Sales.MedianR0!.Value) / row.Offer.Cost * Math.Min(1, row.Sales.SalesPerDay / 5))
-            .ThenByDescending(row => row.Sales.SalesPerDay).ToArray();
-        var lines = ranked.Take(15).Select((row, index) =>
-            $"**{index + 1}. {row.Offer.Name}** · {row.Offer.Cost} Ducats + {row.Offer.Credits:N0} Credits · 30d R0 median {Price(row.Sales.MedianR0)}" +
-            (row.PostVisit?.MedianR0 is { } post ? $" · tracked post-visit {post:0.#}p" : "") +
-            $" · live R0 ask {Price(row.Ask)} · reported {row.Sales.SalesPerDay:0.#}/day" +
-            (costKnown ? $" · estimated margin {(row.PostVisit?.MedianR0 ?? row.Sales.MedianR0!.Value) - row.Offer.Cost * ducatCost:+0.#;-0.#;0}p*" : "") +
-            (costKnown && row.PostVisit?.MedianR0 is { } past && row.PreviousDucats is { } historicalCost
-                ? $" · prior-visit modeled margin {past - historicalCost * ducatCost:+0.#;-0.#;0}p*" : ""));
-        return $"At Baro until <t:{rotation.EndsAt.ToUnixTimeSeconds()}:R>. Official stock <t:{snapshot.SourceTime.ToUnixTimeSeconds()}:R>. {ranked.Length}/{rotation.Offers.Count} mapped stock items have recent closed-order activity.\n\n" +
-            (ranked.Length == 0 ? "No stock item has enough recent rank-zero sales to rank safely." : string.Join('\n', lines)) +
-            "\n\nOnly market-tradeable, mapped stock is ranked. Closed-order activity is not a confirmed trade or a future-price forecast. Post-visit medians appear only after this bot observed a prior Baro visit and at least three later reporting days; otherwise the 30-day median includes periods when he was present." +
-            (costKnown ? " *Margin uses your configured platinum-per-Ducat cost, excludes Credits and trade tax." : " Set `RELICFRAME_DUCAT_COST_PLAT` to show an estimated platinum margin; otherwise ranking favors historical platinum per Ducat with liquidity.");
+        latestBaroSnapshot = snapshot; latestBaroRows = rows.ToArray();
+        return BaroText(snapshot, latestBaroRows);
+    }
+
+    private string BaroText(PrimeVendorSnapshot snapshot, IReadOnlyList<BaroBoardRow> rows)
+    {
+        if (snapshot.Baro is not { } rotation || rotation.EndsAt <= DateTimeOffset.UtcNow)
+            return "Baro is not currently active. Waiting for fresh official stock.";
+        static double? ConfiguredCost(string name)
+            => double.TryParse(Environment.GetEnvironmentVariable(name), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var value) && double.IsFinite(value) && value >= 0 ? value : null;
+        var ducatCost = ConfiguredCost("RELICFRAME_DUCAT_COST_PLAT");
+        var creditCost = ConfiguredCost("RELICFRAME_CREDIT_COST_PLAT_PER_100K");
+        var netKnown = ducatCost.HasValue && creditCost.HasValue;
+        var mode = state.BaroSort is BaroEconomy.Ducats or BaroEconomy.Credits ? state.BaroSort : BaroEconomy.Sales;
+        var ranked = BaroEconomy.Sort(rows.Select(row => new BaroValueRow(row.Offer.Name, row.Offer.Cost,
+            row.Offer.Credits, row.Sales, row.MaxRankSales)), mode, ducatCost, creditCost);
+        var lookup = rows.ToDictionary(row => row.Offer.Name, StringComparer.OrdinalIgnoreCase);
+        var lines = ranked.Take(15).Select((value, index) =>
+        {
+            var row = lookup[value.Name];
+            var basis = BaroEconomy.NetValue(value, ducatCost, creditCost) ?? value.R0.MedianR0;
+            var perDucat = basis.HasValue && value.Ducats > 0 ? $"{basis.Value / value.Ducats * 100:0.#}p/100D" : "n/a";
+            var perCredits = basis.HasValue && value.Credits > 0 ? $"{basis.Value / value.Credits * 100000:0.#}p/100k Cr" : "n/a";
+            var max = row.MaxRank is > 0
+                ? $" · R{row.MaxRank} 30d {Price(row.MaxRankSales?.MedianR0)} / ask {Price(row.MaxRankAsk)}"
+                : "";
+            return $"**{index + 1}. {value.Name}** · {value.Ducats}D + {value.Credits:N0} Cr · {value.R0.SalesPerDay:0.#} R0 sales/day\n" +
+                $"R0 30d {Price(value.R0.MedianR0)} / ask {Price(row.R0Ask)}{max} · {(netKnown ? "net" : "value")} {perDucat}, {perCredits}" +
+                (netKnown && BaroEconomy.NetValue(value, ducatCost, creditCost) is { } net ? $" · margin {net:+0.#;-0.#;0}p" : "") +
+                (row.PostVisit?.MedianR0 is { } post ? $" · post-visit R0 {post:0.#}p" : "");
+        });
+        var label = mode switch
+        {
+            BaroEconomy.Ducats => netKnown ? "estimated net platinum per 100 Ducats" : "R0 sale value per 100 Ducats",
+            BaroEconomy.Credits => netKnown ? "estimated net platinum per 100k Credits" : "R0 sale value per 100k Credits",
+            _ => "reported R0 sales per day"
+        };
+        return $"**Sorted by:** {label}. Baro leaves <t:{rotation.EndsAt.ToUnixTimeSeconds()}:R>. Official stock <t:{snapshot.SourceTime.ToUnixTimeSeconds()}:R>. {ranked.Count}/{rotation.Offers.Count} mapped items.\n\n" +
+            (ranked.Count == 0 ? "No mapped tradeable stock is available to rank." : string.Join("\n\n", lines)) +
+            "\n\n30-day closed-order medians and reported sales are not guaranteed executions. R0 and max-rank values are separate; max-rank margin is not inferred because ranking consumes Endo and Credits. " +
+            (netKnown ? "Net R0 margin subtracts your configured Ducat and Credit opportunity costs; it excludes trade tax."
+                : "Value per resource is gross, not profit. Set both `RELICFRAME_DUCAT_COST_PLAT` (p/Ducat) and `RELICFRAME_CREDIT_COST_PLAT_PER_100K` (p/100k Credits) for estimated net R0 profit.");
     }
 
     private static string Price(double? value) => value is > 0 ? $"{value:0.#}p" : "unknown";
@@ -326,7 +368,7 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
     private async Task PublishAsync(ITextChannel channel, bool aya, string title, string description, CancellationToken ct)
     {
         var text = description.Length <= 4096 ? description : description[..4093] + "…";
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text + (aya ? state.AyaSort : ""))));
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text + (aya ? state.AyaSort : state.BaroSort))));
         var oldId = aya ? state.AyaMessageId : state.BaroMessageId;
         var old = oldId == 0 ? null : await channel.GetMessageAsync(oldId) as IUserMessage;
         if (old is not null && (aya ? state.AyaHash : state.BaroHash) == hash) return;
@@ -335,7 +377,11 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
             .WithButton("Best overall", "aya-sort:overall", state.AyaSort == AyaProfit.Overall ? ButtonStyle.Primary : ButtonStyle.Secondary)
             .WithButton("Prime-part profit", "aya-sort:prime-parts", state.AyaSort == AyaProfit.PrimeParts ? ButtonStyle.Primary : ButtonStyle.Secondary)
             .WithButton("Sell relic", "aya-sort:relic-sale", state.AyaSort == AyaProfit.RelicSale ? ButtonStyle.Primary : ButtonStyle.Secondary)
-            .Build() : null;
+            .Build() : new ComponentBuilder()
+            .WithButton("Sales/day", "baro-sort:sales", state.BaroSort == BaroEconomy.Sales ? ButtonStyle.Primary : ButtonStyle.Secondary)
+            .WithButton("Per 100 Ducats", "baro-sort:ducats", state.BaroSort == BaroEconomy.Ducats ? ButtonStyle.Primary : ButtonStyle.Secondary)
+            .WithButton("Per 100k Credits", "baro-sort:credits", state.BaroSort == BaroEconomy.Credits ? ButtonStyle.Primary : ButtonStyle.Secondary)
+            .Build();
         ulong messageId;
         if (old is null) { var sent = await channel.SendMessageAsync(embed: embed, components: controls, allowedMentions: AllowedMentions.None); messageId = sent.Id; }
         else { await old.ModifyAsync(properties => { properties.Embed = embed; properties.Components = controls; properties.AllowedMentions = AllowedMentions.None; }); messageId = old.Id; }
