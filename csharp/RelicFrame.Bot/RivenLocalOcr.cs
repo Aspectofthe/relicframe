@@ -15,6 +15,7 @@ internal sealed class RivenLocalOcr : IDisposable
     }) { Timeout = TimeSpan.FromSeconds(30) };
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly RivenOnnxOcr onnx = new();
+    private readonly RivenWindowsOcr windows = new();
     private Engine? engine;
 
     public async Task<RivenOcrDraft> AnalyzeAsync(string imageUrl, string filename, int reportedSize, IReadOnlyList<string> weapons, CancellationToken ct)
@@ -63,6 +64,10 @@ internal sealed class RivenLocalOcr : IDisposable
             using var purpleOtsu = purple.BinarizeOtsuAdaptiveThreshold(32, 32, 1, 1, .08f);
             using var sauvola = gray.BinarizeSauvolaTiled(24, .34f, 1, 1);
             var passes = new List<(string Text, float Confidence)>();
+            var windowsText = await windows.RecognizeAsync(bytes, ct);
+            // Windows OCR exposes no confidence score. Use a moderate parser weight,
+            // not a claimed engine confidence, and retain independent local passes.
+            if (!string.IsNullOrWhiteSpace(windowsText)) passes.Add((windowsText, .65f));
             // WFHelper's local ONNX detector/recognizer isolates stat rows before
             // whole-card OCR. Tesseract remains an independent fallback and reads
             // the weapon title/footer that the stat model intentionally ignores.

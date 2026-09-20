@@ -68,6 +68,10 @@ chmod +x csharp/run-bot.sh
 
 The launcher prompts for the same token and server ID. It stores them in owner-only mode-`600` files inside the ignored `csharp/runtime` directory. Use `--forget-credentials` to replace them or `--no-build` after a successful Release build.
 
+### Windows OCR
+
+On Windows, Riven screenshots also use the Windows OCR engine used by PowerToys Text Extractor. PowerToys installation is unnecessary. This runs locally through the built-in Windows PowerShell 5.1 bridge, passes images in memory, and needs an installed English Windows OCR language pack. If unavailable or a pass fails, the other local OCR engines continue. Set `RELICFRAME_WINDOWS_OCR=0` to disable this extra pass. See [Microsoft's OCR language-pack instructions](https://learn.microsoft.com/en-us/windows/powertoys/text-extractor#supported-languages) if the bot reports a missing pack. Restart the bot after installing a pack.
+
 ### Linux OCR
 
 - X11 foreground-window capture: install `xdotool` and ImageMagick (`magick` or `import`).

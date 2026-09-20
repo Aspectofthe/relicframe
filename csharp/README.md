@@ -2,7 +2,7 @@
 
 **This is still a test-guild build until its live soak checks are complete.** The Python deployment and its private state remain unchanged. See [MIGRATION.md](MIGRATION.md) for the remaining release gates.
 
-The executable is C#/.NET 10, using Discord.Net 3.20.1. Runtime calculations do not run Python or call OpenAI. Riven screenshots use local YOLO/PaddleOCR plus Tesseract; visible Trade Chat uses local Tesseract. Companion features are intentionally absent.
+The executable is C#/.NET 10, using Discord.Net 3.20.1. Runtime calculations do not run Python or call OpenAI. Riven screenshots use local YOLO/PaddleOCR plus Tesseract, with an additional Windows OCR pass when available; visible Trade Chat uses local Tesseract. Companion features are intentionally absent.
 
 ## Implemented and tested offline
 
@@ -72,6 +72,7 @@ For direct screenshot posts, enable **Developer Portal → Bot → Privileged Ga
 | `RELICFRAME_EE_LOG` | Optional `true` watches the local Warframe log for your outgoing trade posts; both launchers default this to `true` |
 | `RELICFRAME_EE_LOG_PATH` | Optional path override; defaults to `%LOCALAPPDATA%\Warframe\EE.log` on Windows and auto-detects common Steam/Proton prefixes on Linux |
 | `RELICFRAME_TRADE_OCR` | Optional `true` reads visible incoming Trade Chat; both launchers default this to `true` |
+| `RELICFRAME_WINDOWS_OCR` | Windows Riven-image OCR using the same Windows.Media.Ocr engine as PowerToys Text Extractor; enabled automatically when an English OCR pack is installed. Set `0` to disable. Linux skips this pass. |
 | `RELICFRAME_TRADE_OCR_SECONDS` | OCR interval in seconds, clamped to 3–60; default `5` |
 | `RELICFRAME_TRADE_OCR_REGION` | Fractional `x,y,width,height` crop inside Warframe; default `0,0.34,0.72,0.62` |
 | `RELICFRAME_TRADE_OCR_LINUX_GEOMETRY` | Wayland-only absolute `x,y,width,height` screen crop used by `grim` |
