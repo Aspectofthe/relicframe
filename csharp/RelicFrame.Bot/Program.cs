@@ -95,6 +95,7 @@ await using var primeSetCompletion = new PrimeSetCompletionManager(socket, marke
 await using var arcaneEconomy = new ArcaneEconomyManager(socket, market, http, guildId, runtimePath);
 await using var primeVendors = new PrimeVendorManager(socket, market, http, relics, guildId, runtimePath);
 await using var maxedMods = new MaxedModManager(socket, market, http, guildId, runtimePath);
+await using var syndicates = new SyndicateManager(socket, market, http, guildId, runtimePath);
 var rivenEvidence = new RivenEvidenceControls(socket, rivens, guildId);
 using var rivenImages = new RivenImageWorkflow(socket, rivens, tradeChat, rivenEvidence, guildId);
 var rivenPanel = new RivenAppraisalPanel(socket, rivens, tradeChat, rivenEvidence, guildId, runtimePath);
@@ -128,7 +129,8 @@ string OverallLoadingStatus()
         && !rivens.Status.StartsWith("Stopped", StringComparison.OrdinalIgnoreCase)
         && !rivens.Status.StartsWith("Scan failed", StringComparison.OrdinalIgnoreCase);
     return rivenBusy ? $"loading; ETA calculating (Riven {rivens.ProgressStage})"
-        : maxedMods.Status.StartsWith("pricing", StringComparison.Ordinal) ? $"loading; {maxedMods.Status}" : "ready";
+        : maxedMods.Status.StartsWith("pricing", StringComparison.Ordinal) ? $"loading; {maxedMods.Status}"
+        : syndicates.Status.StartsWith("pricing", StringComparison.Ordinal) ? $"loading; Syndicate {syndicates.Status}" : "ready";
 }
 
 socket.Log += message =>
@@ -193,7 +195,7 @@ socket.SlashCommandExecuted += async command =>
                 $"Overall loading: {OverallLoadingStatus()}.\n" +
                 $"RAM: {process.WorkingSet64 / 1048576d:F1} MiB. Commands: {(jobs.Reader.CanCount ? jobs.Reader.Count : 0)}/16 queued; {commandWorkerCount} workers. Market: {market.Status}; refreshed {market.RefreshedBooks}/{market.TotalBooks}, available {market.ReadyBooks}/{market.TotalBooks}; WebSocket {market.WebSocketStatus}.\n" +
                 $"Rivens: {rivens.Status}.\nOutgoing Trade Chat: {(eeLogEnabled ? eeTradeChat.Status : "EE.log collector disabled")}\n" +
-                $"Visible Trade Chat: {(screenOcrEnabled ? screenTradeChat.Status : "screen OCR disabled")}\nWorld: {world.Status}. Panel: {panel.Status}. Personal Market: {personalMarket.Status}. Arcane Economy: {arcaneEconomy.Status}. Prime vendors: {primeVendors.Status}. Maxed mods: {maxedMods.Status}.\nLast command error: {lastCommandError}.", ephemeral: true, allowedMentions: AllowedMentions.None);
+                $"Visible Trade Chat: {(screenOcrEnabled ? screenTradeChat.Status : "screen OCR disabled")}\nWorld: {world.Status}. Panel: {panel.Status}. Personal Market: {personalMarket.Status}. Arcane Economy: {arcaneEconomy.Status}. Prime vendors: {primeVendors.Status}. Maxed mods: {maxedMods.Status}. Syndicates: {syndicates.Status}.\nLast command error: {lastCommandError}.", ephemeral: true, allowedMentions: AllowedMentions.None);
             return;
         }
         // Acknowledge before dispatch, including when market initialization or calculations are busy.
@@ -274,6 +276,7 @@ async Task ConfigureGuild(SocketGuild guild)
         var arcaneResult = await arcaneEconomy.SetupAsync(guild, lifetime.Token, lifetime.Token); Console.WriteLine("[setup] " + arcaneResult);
         var vendorResult = await primeVendors.SetupAsync(guild, lifetime.Token, lifetime.Token); Console.WriteLine("[setup] " + vendorResult);
         var modResult = await maxedMods.SetupAsync(guild, lifetime.Token); Console.WriteLine("[setup] " + modResult);
+        var syndicateResult = await syndicates.SetupAsync(guild, lifetime.Token); Console.WriteLine("[setup] " + syndicateResult);
         await rivens.StartAsync(lifetime.Token);
         registered = true; Console.WriteLine("[ready] C# preview commands registered in test guild only; market waits for /rf-relics refresh.");
     }
@@ -319,7 +322,7 @@ catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
 finally
 {
     lifetime.Cancel(); jobs.Writer.TryComplete();
-    await maxedMods.StopAsync(); await primeVendors.StopAsync(); await arcaneEconomy.StopAsync(); await primeSetCompletion.StopAsync(); await personalMarket.StopAsync(); await market.StopAsync(); await rivens.StopAsync(); await world.StopAsync(); await panel.StopAsync(); await Task.WhenAll(workers);
+    await syndicates.StopAsync(); await maxedMods.StopAsync(); await primeVendors.StopAsync(); await arcaneEconomy.StopAsync(); await primeSetCompletion.StopAsync(); await personalMarket.StopAsync(); await market.StopAsync(); await rivens.StopAsync(); await world.StopAsync(); await panel.StopAsync(); await Task.WhenAll(workers);
     await socket.StopAsync(); await socket.LogoutAsync(); registration.Dispose();
 }
 

@@ -112,6 +112,29 @@ var ayaRanking = new AyaValueRow[]
     new("Neo C3 Relic", 1, 50, null, null, null, null),
     new("Axi D4 Relic", 1, null, null, null, null, null)
 };
+using (var syndicateFixture = JsonDocument.Parse("""
+{"syndicates":{"Steel Meridian":[
+ {"item":"Scattered Justice (Hek)","standing":25000,"place":"Steel Meridian, Protector"},
+ {"item":"Scattered Justice (Hek)","standing":25000,"place":"Steel Meridian, Protector"},
+ {"item":"Vaykor Hek","standing":125000,"place":"Steel Meridian, General"},
+ {"item":"Unknown","standing":1},{"item":"Scattered Justice (Hek)","standing":0}],
+ "Kahl's Garrison":[{"item":"Scattered Justice","standing":10}]}}
+"""))
+{
+    var offers = SyndicateProfit.Parse(syndicateFixture.RootElement, name => name switch
+    {
+        "Scattered Justice" => new("augment", "scattered_justice", name, ["mod", "syndicate"], 3),
+        "Vaykor Hek" => new("weapon", "vaykor_hek", name, ["weapon", "syndicate"], null),
+        _ => null
+    });
+    Assert(offers.Count == 2 && offers[0].RequiredRank == "Protector" && offers[0].Standing == 25000,
+        "Syndicate parser resolves mod target suffixes, retains rank/cost, deduplicates and excludes non-standing currencies");
+    var row = SyndicateProfit.Evaluate(offers[0], 20, new(15, 6, 20), DateTimeOffset.UtcNow)!;
+    Assert(row.Price == 15 && SyndicateProfit.Convert(row, 60000) == (2, 10000, 30d),
+        "standing converter caps resale at reported median and buys whole items within budget");
+    Assert(SyndicateProfit.Evaluate(offers[1], 100, new(100, .1, 1), DateTimeOffset.UtcNow) is null,
+        "thinly traded Syndicate offerings are not recommended as liquid returns");
+}
 Assert(MaxedModProfit.UpgradeCost(["legendary", "mod"], 10) == new ModUpgradeCost(40920, 1976436) &&
     MaxedModProfit.UpgradeCost(["rare", "mod"], 10) == new ModUpgradeCost(30690, 1482327) &&
     MaxedModProfit.UpgradeCost(["uncommon"], 10) == new ModUpgradeCost(20460, 988218) &&

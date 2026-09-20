@@ -68,6 +68,12 @@ chmod +x csharp/run-bot.sh
 
 The launcher prompts for the same token and server ID. It stores them in owner-only mode-`600` files inside the ignored `csharp/runtime` directory. Use `--forget-credentials` to replace them or `--no-build` after a successful Release build.
 
+### Syndicate standing converter
+
+The bot creates **SYNDICATE ECONOMY / #standing-profit**. Choose one of the six main Syndicates, then use **Set standing budget** (0–132,000). Each row shows a separate purchase option: required vendor rank, standing cost, expected gross platinum, whole-item quantity and leftover standing. The board covers marketplace-mapped mods, weapons and components; it does not read your in-game standing or spend it. The filter, budget and sort are shared board settings.
+
+Sort by activity-weighted return, platinum per 25,000 standing, or reported sales/day. Prices use the lower of the online R0 ask and the 30-day R0 median, with at least one reported sale/day and three reporting days. Unused Syndicate weapons must meet the game's trade eligibility conditions. Vendor costs come from [WFCD's wiki-derived dataset](https://github.com/WFCD/warframe-drop-data#datasyndicatesjson), refreshed daily with a dated cache allowed for up to seven days. Market statistics are cached for six hours and use the existing shared API limiter. Gross estimates exclude trade tax and do not promise that every unit sells immediately.
+
 ### Maxed-mod profit
 
 The bot creates **MOD ECONOMY / #maxed-mod-profit** for tradeable rank-10 mods. It compares R0 purchase asks with max-rank resale estimates, shows Endo/Credit upgrade costs and reported R10 sales/day, and offers best-return, per-1k-Endo and sales/day sorts. Prices must be fresh and R10 activity must average at least one reported sale/day over 30 days with at least three reporting days. Its default ranking is gross gain multiplied by `min(1, sales/day / 5)`.
