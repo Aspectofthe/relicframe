@@ -13,6 +13,8 @@ internal sealed record PersonalMarketState
     public int Page { get; set; } = 1;
     public string RenderHash { get; set; } = "";
     public bool? AutoPublishEnabled { get; set; }
+    public bool SellCompleteSets { get; set; } = true;
+    public bool ProtectIncompleteSets { get; set; } = true;
     public Dictionary<string, string> ManagedOrderIds { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> LastInventory { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, int> ManagedOrderQuantities { get; set; } = new(StringComparer.Ordinal);
@@ -268,26 +270,28 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             state.PortfolioBaselineAskValue = portfolio.EstimatedAskValue;
             state.PortfolioBaselinePricedItems = portfolio.PricedItems;
         }
-        var blockedIds = new HashSet<string>(StringComparer.Ordinal);
-        var setInventory = new List<PrimeInventoryEntry>();
+        var listingPlan = new PrimeSetListingPlan([], new Dictionary<string, int>(StringComparer.Ordinal));
         if (marketUsable)
         {
-            var topSets = (await setCompletion.AnalyzeAsync(inventory, ownSellerSlug, null, ct, requireComplete: true)).Take(10)
-                .Select(row => row.SetName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var ownedCounts = inventory.GroupBy(ItemIdForInventory).Where(group => group.Key is not null)
-                .ToDictionary(group => group.Key!, group => group.Sum(row => row.Quantity), StringComparer.Ordinal);
-            foreach (var definition in setDefinitions)
+            var topSets = state.ProtectIncompleteSets
+                ? (await setCompletion.AnalyzeAsync(inventory, ownSellerSlug, null, ct, requireComplete: true)).Take(10)
+                    .Select(row => row.SetName).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var stock = inventory.Select(row => new
             {
-                var quantity = definition.Components.Min(part => ownedCounts.GetValueOrDefault(part.ItemId) / part.Quantity);
-                var protectedSet = topSets.Contains(definition.SetName);
-                if (!protectedSet && quantity == 0) continue;
-                foreach (var part in definition.Components) blockedIds.Add(part.ItemId);
-                if (protectedSet) { blockedIds.Add(definition.SetItemId); continue; }
-                await market.RefreshBooksAsync([definition.SetName], force ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5), ct, lowPriority: !force);
-                setInventory.Add(new(definition.SetItemId, quantity, definition.SetName));
-            }
+                Item = row, ItemId = ItemIdForInventory(row),
+                Name = !string.IsNullOrWhiteSpace(row.ItemName) ? row.ItemName : market.NameForGameRef(row.GameRef)
+            }).Where(row => row.ItemId is not null && row.Name is not null)
+              .Select(row => new PrimeSetStock(row.ItemId!, row.Name!, row.Item.Quantity));
+            listingPlan = PrimeSetListingPlan.Build(stock, setDefinitions, topSets,
+                state.SellCompleteSets, state.ProtectIncompleteSets);
+            if (listingPlan.Sellable.Any(row => setDefinitions.Any(set => set.SetItemId == row.ItemId)))
+                await market.RefreshBooksAsync(listingPlan.Sellable.Where(row => setDefinitions.Any(set => set.SetItemId == row.ItemId))
+                    .Select(row => row.ItemName), force ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5), ct, lowPriority: !force);
         }
-        var sellableInventory = inventory.Where(row => !blockedIds.Contains(ItemIdForInventory(row) ?? "")).Concat(setInventory).ToArray();
+        var sellableInventory = marketUsable
+            ? listingPlan.Sellable.Select(row => new PrimeInventoryEntry(row.ItemId, row.Quantity, row.ItemName)).ToArray()
+            : inventory.ToArray();
         candidates = sellableInventory.Select(item => new
         {
             Item = item,
@@ -307,7 +311,8 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         {
             var freshIneligible = assessed.Where(row => row.Quote is null && row.BookFresh)
                 .Select(row => market.ItemIdForName(row.Name)).OfType<string>().ToHashSet(StringComparer.Ordinal);
-            var actions = await ReconcileAccountAsync(sellableInventory, quotes, freshIneligible, orders, sourceActions, ct, blockedIds);
+            var actions = await ReconcileAccountAsync(sellableInventory, quotes, freshIneligible, orders, sourceActions, ct,
+                listingPlan.ControlledQuantities);
             if (actions.Length > 0) state.LastActions = actions;
         }
         else if (sourceActions.Count > 0) state.LastActions = sourceActions.Take(8).ToArray();
@@ -325,6 +330,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             : string.Join('\n', rows);
         var mode = state.AutoPublishEnabled == true ? "AUTO LISTING ENABLED" : "AUTO LISTING PAUSED";
         description += $"\n\n**{mode}.** Minimum {minimumPrice}p · undercut {undercut}p · stabilized online/recent-visible price · owner listing excluded: {(ownSellerSlug.Length > 0 ? "yes" : "no; set RELICFRAME_WFM_USER_SLUG")} · inventory file <t:{new DateTimeOffset(sourceAge).ToUnixTimeSeconds()}:R>.";
+        description += $"\n**Complete sets:** {(state.SellCompleteSets ? "sell sets and only surplus parts" : "sell parts separately")} · **incomplete top-10 sets:** {(state.ProtectIncompleteSets ? "reserve one completion's owned parts" : "sell unreserved parts")}.";
         var belowFloor = assessed.Where(row => row.Quote is null && row.Best is not null && row.Best.Price < minimumPrice)
             .OrderByDescending(row => row.Best!.Price).ThenBy(row => row.Item.ItemName, StringComparer.OrdinalIgnoreCase).ToArray();
         var noAsk = assessed.Count(row => row.Quote is null && row.Best is null);
@@ -355,7 +361,9 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             .WithButton("Previous", "personal-market:prev", ButtonStyle.Secondary, disabled: state.Page <= 1)
             .WithButton("Sync listings now", "personal-market:refresh", ButtonStyle.Primary)
             .WithButton("Next", "personal-market:next", ButtonStyle.Secondary, disabled: state.Page >= pages)
-            .WithButton(state.AutoPublishEnabled == true ? "Pause auto listing" : "Enable auto listing", "personal-market:auto-toggle", state.AutoPublishEnabled == true ? ButtonStyle.Danger : ButtonStyle.Success, row: 1).Build();
+            .WithButton(state.AutoPublishEnabled == true ? "Pause auto listing" : "Enable auto listing", "personal-market:auto-toggle", state.AutoPublishEnabled == true ? ButtonStyle.Danger : ButtonStyle.Success, row: 1)
+            .WithButton(state.SellCompleteSets ? "Sell sets: ON" : "Sell sets: OFF", "personal-market:sets-toggle", ButtonStyle.Secondary, row: 1)
+            .WithButton(state.ProtectIncompleteSets ? "Protect completions: ON" : "Protect completions: OFF", "personal-market:completion-toggle", ButtonStyle.Secondary, row: 1).Build();
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(embed.Description + "\0" + embed.Footer?.Text + "\0" + state.Page)));
         if (!force && state.MessageId != 0 && state.RenderHash == hash) { Save(); status = $"ready; {quotes.Length} eligible; auto listing {(state.AutoPublishEnabled == true ? "enabled" : "paused")}"; return; }
         var old = state.MessageId == 0 ? null : await channel.GetMessageAsync(state.MessageId) as IUserMessage;
@@ -366,7 +374,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
 
     private async Task<string[]> ReconcileAccountAsync(IReadOnlyList<PrimeInventoryEntry> inventory, IReadOnlyList<PersonalMarketQuote> quotes,
         IReadOnlySet<string> freshIneligible, IReadOnlyList<WfmOwnOrder> orders, IEnumerable<string> observedActions, CancellationToken ct,
-        IReadOnlySet<string> blockedIds)
+        IReadOnlyDictionary<string, int> controlledQuantities)
     {
         var sellOrders = orders.Where(order => order.Type.Equals("sell", StringComparison.OrdinalIgnoreCase)).GroupBy(order => order.ItemId)
             .ToDictionary(group => group.Key, group => group.OrderByDescending(order => order.Visible).ThenBy(order => order.Id, StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
@@ -379,14 +387,21 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         var owned = inventory.Select(ItemIdForInventory).OfType<string>().ToHashSet(StringComparer.Ordinal);
         var eligible = quotes.Select(quote => market.ItemIdForName(quote.ItemName)).OfType<string>().ToHashSet(StringComparer.Ordinal);
         var actions = new List<string>(observedActions); var writes = 0; reconciliationPending = false;
-        // Remove every conflicting component/protected-set order before publishing sets.
-        foreach (var order in orders.Where(order => order.Type.Equals("sell", StringComparison.OrdinalIgnoreCase) && blockedIds.Contains(order.ItemId)))
+        // Reduce conflicting orders before any set or surplus-part listing is published.
+        // A set and its parts must never be listed against the same physical units.
+        foreach (var controlled in controlledQuantities)
         {
-            if (writes >= 25) { reconciliationPending = true; Save(); return ["• Set-part removals pending; set listing waits for the next pass."]; }
-            await account.DeleteOrderAsync(order.Id, ct); writes++;
-            state.ManagedOrderIds.Remove(order.ItemId); state.ManagedOrderQuantities.Remove(order.ItemId); state.ManagedOrderPrices.Remove(order.ItemId);
-            sellOrders.Remove(order.ItemId); Save();
-            actions.Add($"• Deleted **{market.NameForItemId(order.ItemId)}**: reserved for a set or protected top-10 completion.");
+            if (!sellOrders.TryGetValue(controlled.Key, out var existing)) continue;
+            if (controlled.Value > 0 && existing.Length == 1 && existing[0].Quantity <= controlled.Value) continue;
+            foreach (var order in existing)
+            {
+                if (writes >= 25) { reconciliationPending = true; Save(); return ["• Set/part order reductions pending; new listings wait for the next pass."]; }
+                await account.DeleteOrderAsync(order.Id, ct); writes++;
+                state.ManagedOrderIds.Remove(controlled.Key); state.ManagedOrderQuantities.Remove(controlled.Key); state.ManagedOrderPrices.Remove(controlled.Key);
+                Save();
+            }
+            sellOrders.Remove(controlled.Key);
+            actions.Add($"• Removed conflicting **{market.NameForItemId(controlled.Key)}** order before updating reserved set/part quantities.");
         }
         foreach (var managed in state.ManagedOrderIds.ToArray())
         {
@@ -636,9 +651,14 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             if (interaction.Data.CustomId.EndsWith(":prev", StringComparison.Ordinal)) state.Page--;
             if (interaction.Data.CustomId.EndsWith(":next", StringComparison.Ordinal)) state.Page++;
             if (interaction.Data.CustomId.EndsWith(":auto-toggle", StringComparison.Ordinal)) state.AutoPublishEnabled = state.AutoPublishEnabled != true;
+            if (interaction.Data.CustomId.EndsWith(":sets-toggle", StringComparison.Ordinal)) state.SellCompleteSets = !state.SellCompleteSets;
+            if (interaction.Data.CustomId.EndsWith(":completion-toggle", StringComparison.Ordinal)) state.ProtectIncompleteSets = !state.ProtectIncompleteSets;
+            Save();
             var channel = interaction.Channel as ITextChannel ?? throw new InvalidOperationException("Personal Market channel unavailable.");
             await UpdateLockedAsync(channel, force: true, CancellationToken.None);
-            await interaction.FollowupAsync(state.AutoPublishEnabled == true ? "Personal Market synchronized with Warframe.market." : "Automatic listing is paused; inventory view refreshed without account writes.", ephemeral: true);
+            await interaction.FollowupAsync(state.AutoPublishEnabled == true
+                ? "Personal Market synchronized with Warframe.market using the selected set/completion rules."
+                : "Automatic listing is paused; inventory view and set/completion rules refreshed without account writes.", ephemeral: true);
         }
         catch (Exception e) { await interaction.FollowupAsync($"Refresh failed: {e.Message}", ephemeral: true); }
         finally { gate.Release(); }

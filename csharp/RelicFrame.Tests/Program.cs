@@ -105,6 +105,44 @@ var portfolioSummary = PortfolioValuation.Calculate([
 ]);
 Assert(portfolioSummary == new PortfolioSummary(24, 2, 7, 1, 4),
     "portfolio excludes stale, missing, nonfinite and zero-stock prices while disclosing coverage");
+var listingDefinition = new PrimeSetDefinition("set", "Example Prime Set", [
+    new("blueprint", "Example Prime Blueprint", 1),
+    new("blade", "Example Prime Blade", 2)
+]);
+var fullStock = new PrimeSetStock[] { new("blueprint", "Example Prime Blueprint", 3), new("blade", "Example Prime Blade", 5) };
+var fullPlan = PrimeSetListingPlan.Build(fullStock, [listingDefinition], new HashSet<string>(), true, true);
+Assert(fullPlan.Sellable.Single(row => row.ItemId == "set").Quantity == 2
+    && fullPlan.Sellable.Single(row => row.ItemId == "blueprint").Quantity == 1
+    && fullPlan.Sellable.Single(row => row.ItemId == "blade").Quantity == 1
+    && fullPlan.ControlledQuantities["blueprint"] == 1 && fullPlan.ControlledQuantities["blade"] == 1,
+    "complete-set listings reserve exact component quantities and leave surplus parts sellable");
+var virtualSetPlan = PrimeSetListingPlan.Build(fullStock.Append(new("set", "Example Prime Set", 2)),
+    [listingDefinition], new HashSet<string>(), true, false);
+Assert(virtualSetPlan.Sellable.Single(row => row.ItemId == "set").Quantity == 2,
+    "an imported virtual set row cannot double-count the same component stock");
+Assert(PrimeSetListingPlan.Build([new("set", "Example Prime Set", 1)], [listingDefinition],
+        new HashSet<string>(), true, false).Sellable.Single().Quantity == 1
+    && !PrimeSetListingPlan.Build([new("set", "Example Prime Set", 1), new("blueprint", "Example Prime Blueprint", 1)],
+        [listingDefinition], new HashSet<string>(), true, false).Sellable.Any(row => row.ItemId == "set"),
+    "set-only imports can list a set but conflicting partial components cannot inflate it");
+var partsPlan = PrimeSetListingPlan.Build(fullStock, [listingDefinition], new HashSet<string>(), false, true);
+Assert(!partsPlan.Sellable.Any(row => row.ItemId == "set")
+    && partsPlan.Sellable.Single(row => row.ItemId == "blueprint").Quantity == 3
+    && partsPlan.Sellable.Single(row => row.ItemId == "blade").Quantity == 5
+    && partsPlan.ControlledQuantities["set"] == 0,
+    "parts mode lists components independently and retires existing set orders");
+var partialStock = new PrimeSetStock[] { new("blueprint", "Example Prime Blueprint", 3), new("blade", "Example Prime Blade", 1) };
+var protectedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Example Prime Set" };
+var protectedPlan = PrimeSetListingPlan.Build(partialStock, [listingDefinition], protectedNames, true, true);
+Assert(!protectedPlan.Sellable.Any(row => row.ItemId == "set")
+    && protectedPlan.Sellable.Single(row => row.ItemId == "blueprint").Quantity == 2
+    && !protectedPlan.Sellable.Any(row => row.ItemId == "blade")
+    && protectedPlan.ControlledQuantities["blade"] == 0,
+    "completion protection reserves only one partial set and leaves extra components sellable");
+var unprotectedPlan = PrimeSetListingPlan.Build(partialStock, [listingDefinition], protectedNames, true, false);
+Assert(unprotectedPlan.Sellable.Single(row => row.ItemId == "blueprint").Quantity == 3
+    && unprotectedPlan.Sellable.Single(row => row.ItemId == "blade").Quantity == 1,
+    "completion protection can be disabled without changing complete-set mode");
 var ayaRanking = new AyaValueRow[]
 {
     new("Lith A1 Relic", 1, 10, 40, "Alpha Prime Blueprint", 100, 2),
