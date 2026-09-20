@@ -2,6 +2,21 @@
 
 RelicFrame currently runs directly on the computer that launches it. An Oracle server, shared price service, reverse proxy, or public IP is **not required**. Remote/shared caching may be added later as an optional deployment mode.
 
+## Fresh-install checklist
+
+For the current C# bot, select the **`csharp-rewrite` branch** on GitHub before downloading the ZIP, or clone that branch. Extract the entire repository; do not run a copied `csharp` folder without its sibling `relicframe/data` files. Run the launcher from the repository root.
+
+| Needed for | What to provide |
+| --- | --- |
+| Every installation | .NET 10 SDK, a Discord bot token, a Discord server ID, the invited bot with permissions and Message Content Intent, and the checked-in `relicframe/data` directory |
+| Private Personal Market controls for a non-server-owner | That person's Discord user ID as `RELICFRAME_PERSONAL_USER_ID` or in a locally created settings file |
+| Showing owned Prime parts | A compatible, current local inventory file: AlecaFrame `lastData.dat`, WFHelper/helper `inventory.json`, or a manual JSON list |
+| Creating/changing Warframe.market listings | The account owner's own Warframe.market token; keep auto-publishing paused until inventory and prices have been verified |
+| Immediate AlecaFrame completed-trade reconciliation | An optional AlecaFrame **Trades-only public token**; omit this entirely if AlecaFrame is not used |
+| Capturing visible Trade Chat on Linux | Optional desktop capture packages and configuration in **Linux OCR** below; not needed for Discord image attachments |
+
+Public relic, world, Prime, Arcane, mod and Riven boards do **not** require AlecaFrame, WFHelper, a Warframe.market login, OpenAI, or another cloud AI key. `csharp/runtime/` and private token/settings files are intentionally **absent from GitHub**; each installer creates their own local configuration. Never copy a friend's runtime directory or run two instances with the same bot token in the same server.
+
 ## 1. Install the prerequisites
 
 - Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
@@ -16,6 +31,8 @@ dotnet --version
 ```
 
 The result must begin with `10.`. The checked-in Windows launcher will use `.tools\dotnet\dotnet.exe` instead when that local SDK exists.
+
+For a Git checkout, use `git clone --branch csharp-rewrite https://github.com/Aspectofthe/relicframe.git`. For a ZIP, choose the `csharp-rewrite` branch on the repository page before **Code → Download ZIP**, extract it, and open a terminal in the extracted repository root. The repository must contain `csharp/run-bot.cmd` (or `csharp/run-bot.sh`) and `relicframe/data/relics_from_official_data.csv`.
 
 ## 2. Create the Discord bot
 
@@ -57,6 +74,8 @@ After one successful build, `-NoBuild` can be used for a quicker launch:
 .\csharp\run-bot.cmd -NoBuild
 ```
 
+Use the normal launch again after downloading new code; `-NoBuild` deliberately skips compiling updates. If the ZIP was extracted to a different computer or Windows account, the old DPAPI credential file cannot be reused—let that computer's launcher prompt for its own token and server ID.
+
 ## 5. Start on Linux
 
 From the repository root:
@@ -67,6 +86,8 @@ chmod +x csharp/run-bot.sh
 ```
 
 The launcher prompts for the same token and server ID. It stores them in owner-only mode-`600` files inside the ignored `csharp/runtime` directory. Use `--forget-credentials` to replace them or `--no-build` after a successful Release build.
+
+Set optional environment variables in the same terminal **before** starting the launcher. They are not stored in the downloaded ZIP and a variable set in one terminal is not automatically available in a new terminal.
 
 ### Syndicate standing converter
 
@@ -130,6 +151,8 @@ The `csharp/runtime/` directory is Git-ignored and may not exist in a fresh GitH
 
 An AlecaFrame public token is **optional** and only enables its completed-trade feed; it is not needed to open the private board or read a WFHelper/manual inventory file. Do not create `aleca-public-token.txt` if you do not use that integration. A separate, owner-specific Warframe.market token is required only for authenticated listing changes; keep auto-publishing paused until it is configured and tested.
 
+For a friend running a separate bot on their PC, the simplest safe start is: launch with **their own** Discord bot token/server ID, set their own owner ID if they are not the server owner, leave auto-publishing off, and confirm `/rf-status` works. Then add their own inventory source. Add a Warframe.market token only when they explicitly want the bot to manage their listings. The `#personal-market` board can exist with an empty inventory; that does not mean the bot found their items.
+
 ### Reuse another app's inventory snapshot
 
 RelicFrame reads a **local snapshot file**, not another app's account session or a live inventory API. [WFHelper's inventory setup](https://github.com/WFHelper/wfhelper/blob/main/docs/features/getting-started.md#choose-an-inventory-source) can use its helper-generated `inventory.json`, a manually imported `inventory.json`, or AlecaFrame's `lastData.dat`. Point `RELICFRAME_PRIME_INVENTORY_JSON` at the actual file that your chosen source refreshes, not WFHelper's settings/state file or a Warframe.market export.
@@ -176,5 +199,17 @@ dotnet build csharp/RelicFrame.Bot -c Release
 ```
 
 If commands do not appear, verify the invite included `applications.commands`, the server ID is correct, and the bot is online in that server. If boards cannot be created, recheck **Manage Channels** and **Manage Roles**. If directly posted Riven screenshots are ignored, recheck **Message Content Intent** in the Developer Portal and restart the bot.
+
+| Symptom | Check first |
+| --- | --- |
+| “This private board belongs to its configured owner” | The clicking user's Discord ID versus `RELICFRAME_PERSONAL_USER_ID` or `DiscordUserId`; the fallback is the server owner. Restart after changing it. |
+| No `personal_market_settings.json` or AlecaFrame token file in a GitHub download | Expected: both are optional, local, Git-ignored files. Create only the settings file you need; never use another person's tokens. |
+| Personal Market has no owned items | Check the selected inventory file exists, contains compatible rows, has refreshed since the last trade, and reports nonzero rows with `--profile-inventory`. A new installation has no private inventory snapshot. |
+| Listing action says token missing | Viewing the board needs no Warframe.market token; authenticated listing writes do. Keep auto-publishing paused until the owner's token is supplied. |
+| `dotnet` not found or wrong version | Install the .NET **10 SDK**, reopen the terminal, and run `dotnet --version`; the Windows launcher can also use a checked-in-path `.tools/dotnet` installation if present locally. |
+| Startup says public data is missing | Download/extract the full repository and launch from its root; check `relicframe/data/relics_from_official_data.csv`. |
+| A friend sees the same board or changes interfere | Confirm each install uses its intended Discord application/token and server. Two processes using one bot token against one server will conflict. |
+
+If a check still fails, send the **exact error text**, the relevant startup or `/rf-status` line, operating system, and whether the source is AlecaFrame, WFHelper, or manual JSON. Redact Discord and market tokens, inventory contents, and private account data before sharing logs.
 
 Oracle hosting and shared public-price caching are intentionally deferred. The local launchers and every current feature work without them.
