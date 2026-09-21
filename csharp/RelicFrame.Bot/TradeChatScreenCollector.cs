@@ -219,12 +219,19 @@ sealed class TradeChatScreenCollector : IAsyncDisposable
         using var output = new MemoryStream();
         var copy = process.StandardOutput.BaseStream.CopyToAsync(output);
         var error = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(5000))
+        // Image capture can fill the OS pipe buffer. Drain stdout and stderr while
+        // the capture process is running, otherwise WaitForExit can deadlock.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
         {
-            process.Kill(entireProcessTree: true);
+            Task.WhenAll(copy, error, process.WaitForExitAsync(timeout.Token))
+                .WaitAsync(timeout.Token).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
             throw new TimeoutException($"{executable} did not finish within five seconds.");
         }
-        copy.GetAwaiter().GetResult();
         var errorText = error.GetAwaiter().GetResult().Trim();
         if (process.ExitCode != 0) throw new InvalidOperationException($"{executable} failed: {errorText}");
         if (output.Length > 16 * 1024 * 1024) throw new InvalidDataException($"{executable} returned an image larger than 16 MB.");
@@ -248,6 +255,8 @@ sealed class TradeChatScreenCollector : IAsyncDisposable
         try
         {
             if (!BitBlt(target, 0, 0, crop.Width, crop.Height, source, crop.X, crop.Y, 0x00CC0020)) return [];
+            // GetDIBits requires the bitmap not to be selected into a DC.
+            SelectObject(target, previous);
             var stride = ((crop.Width * 24 + 31) / 32) * 4;
             var pixels = new byte[stride * crop.Height];
             var info = new BitmapInfo { Header = new BitmapInfoHeader { Size = 40, Width = crop.Width, Height = -crop.Height, Planes = 1, BitCount = 24, SizeImage = (uint)pixels.Length } };
