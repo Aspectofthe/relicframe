@@ -844,6 +844,9 @@ var retryHandler = new RetryHandler();
         await setMarket.StartAsync(true, default);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (setMarket.Status != "ready") await Task.Delay(10, timeout.Token);
+        Assert(setMarket.PrimeSetNames.Contains("Example Prime Set") && setMarket.ReadyBooks == 1
+            && setMarket.RewardEstimate("Example Prime Set").Price == 50,
+            "Prime-set price board can use a bootstrapped set order book without a separate scan");
         var completion = new PrimeSetCompletion(setMarket, setHttp, Path.Combine(temp, "prime-set-components.json"));
         var opportunities = await completion.AnalyzeAsync([
             new PrimeInventoryEntry("example-blueprint", 1, "Example Prime Blueprint"),

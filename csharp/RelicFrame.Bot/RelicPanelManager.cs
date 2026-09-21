@@ -35,6 +35,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
     internal const string CategoryName = "THE LIST";
     internal const string GuideKey = "how-it-works";
     internal const string PrimePricesKey = "prime-part-prices";
+    internal const string PrimeSetPricesKey = "prime-set-prices";
     private const string ComponentRevision = "rf-list-components-v2";
     private const int PageSize = 15;
     private const double VaultedRewardFloor = 5;
@@ -46,6 +47,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
         ["lowest-risk"] = "Lowest Risk", ["best-win-chance"] = "Best Win Chance"
     };
     private sealed record PrimePartRow(string Name, RewardPriceEstimate Estimate, (string Relic, string Rarity, bool? Vaulted)[] Sources);
+    private sealed record PrimeSetRow(string Name, RewardPriceEstimate Estimate);
     private readonly DiscordSocketClient bot;
     private readonly LiveMarket market;
     private readonly IReadOnlyDictionary<string, Relic> relics;
@@ -111,6 +113,13 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             else if (primeChannel.CategoryId != category.Id || primeChannel.Topic != primeTopic)
                 await primeChannel.ModifyAsync(p => { p.CategoryId = category.Id; p.Topic = primeTopic; });
             primeState.ChannelId = primeChannel.Id; primeState.RenderHash = ""; primeState.CleanupPending = true;
+            var setState = ListState(guild.Id, PrimeSetPricesKey);
+            const string setTopic = "Prime sets sorted by current estimated sell price";
+            ITextChannel? setChannel = guild.GetTextChannel(setState.ChannelId) ?? guild.TextChannels.FirstOrDefault(c => c.CategoryId == category.Id && c.Name == PrimeSetPricesKey);
+            if (setChannel is null) { setChannel = await guild.CreateTextChannelAsync(PrimeSetPricesKey, p => { p.CategoryId = category.Id; p.Topic = setTopic; }); created.Add(PrimeSetPricesKey); }
+            else if (setChannel.CategoryId != category.Id || setChannel.Topic != setTopic)
+                await setChannel.ModifyAsync(p => { p.CategoryId = category.Id; p.Topic = setTopic; });
+            setState.ChannelId = setChannel.Id; setState.RenderHash = ""; setState.CleanupPending = true;
             var guideState = ListState(guild.Id, GuideKey);
             ITextChannel? guide = guild.GetTextChannel(guideState.ChannelId) ?? guild.TextChannels.FirstOrDefault(c => c.CategoryId == category.Id && c.Name == GuideKey);
             if (guide is null) { guide = await guild.CreateTextChannelAsync(GuideKey, p => { p.CategoryId = category.Id; p.Topic = "How RelicFrame calculates profit, ROI, risk, traces, and ducats"; }); created.Add(GuideKey); }
@@ -118,7 +127,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
                 await guide.ModifyAsync(p => { p.CategoryId = category.Id; p.Topic = "How RelicFrame calculates profit, ROI, risk, traces, and ducats"; });
             guideState.ChannelId = guide.Id; guideState.RenderHash = ""; guideState.CleanupPending = true;
             Save(); await market.StartAsync(false, lifetime); Start(lifetime); await UpdateAsync(ct);
-            return $"Configured {Lists.Count} ranking channels, **#{PrimePricesKey}**, and **#{GuideKey}** in **{CategoryName}**." + (created.Count > 0 ? $" Created: {string.Join(", ", created)}." : " Existing channels were repaired.");
+            return $"Configured {Lists.Count} ranking channels, **#{PrimePricesKey}**, **#{PrimeSetPricesKey}**, and **#{GuideKey}** in **{CategoryName}**." + (created.Count > 0 ? $" Created: {string.Join(", ", created)}." : " Existing channels were repaired.");
         }
         finally { setup.Release(); }
     }
@@ -169,9 +178,11 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             }
             try { await UpdatePrimePricesAsync(guild, botMember.Id, market.Snapshot(Refinement.Radiant)); }
             catch (Exception e) when (e is Discord.Net.HttpException or InvalidOperationException or IOException) { failures.Add($"{PrimePricesKey}: {e.GetType().Name}"); }
+            try { await UpdatePrimeSetPricesAsync(guild, botMember.Id); }
+            catch (Exception e) when (e is Discord.Net.HttpException or InvalidOperationException or IOException) { failures.Add($"{PrimeSetPricesKey}: {e.GetType().Name}"); }
             try { await UpdateGuideAsync(guild, botMember.Id); }
             catch (Exception e) when (e is Discord.Net.HttpException or InvalidOperationException or IOException) { failures.Add($"{GuideKey}: {e.GetType().Name}"); }
-            Save(); status = failures.Count == 0 ? $"ready; {Lists.Count} rankings + Prime prices + guide" : $"partial: {failures.Count} list failures; {failures[0]}";
+            Save(); status = failures.Count == 0 ? $"ready; {Lists.Count} rankings + Prime part/set prices + guide" : $"partial: {failures.Count} list failures; {failures[0]}";
         }
         finally { update.Release(); }
     }
@@ -305,6 +316,58 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             .WithFooter("Prices are current asks, not completed sales. Unvaulted parts use the stabilized online/recent-visible estimate.").Build();
         await interaction.FollowupAsync(embed: embed, ephemeral: true, allowedMentions: AllowedMentions.None);
     }
+    private PrimeSetRow[] PrimeSetRows() => market.PrimeSetNames
+        .Select(name => new PrimeSetRow(name, market.RewardEstimate(name)))
+        .OrderByDescending(row => row.Estimate.Price.HasValue)
+        .ThenByDescending(row => row.Estimate.Price)
+        .ThenBy(row => row.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private async Task UpdatePrimeSetPricesAsync(SocketGuild guild, ulong botUserId)
+    {
+        var saved = ListState(guild.Id, PrimeSetPricesKey);
+        var channel = guild.GetTextChannel(saved.ChannelId) ?? throw new InvalidOperationException($"#{PrimeSetPricesKey} is missing; run setup again.");
+        var rows = market.IsBootstrapping || market.ReadyBooks == 0 ? [] : PrimeSetRows();
+        var totalPages = Math.Max(1, (rows.Length + PageSize - 1) / PageSize);
+        saved.Page = Math.Clamp(saved.Page, 1, totalPages);
+        var pageRows = rows.Skip((saved.Page - 1) * PageSize).Take(PageSize).ToArray();
+        if (saved.SelectedRelic is null || !pageRows.Any(row => row.Name.Equals(saved.SelectedRelic, StringComparison.OrdinalIgnoreCase)))
+            saved.SelectedRelic = pageRows.FirstOrDefault()?.Name;
+        var description = market.IsBootstrapping || market.ReadyBooks == 0
+            ? $"Live market bootstrap is in progress: {market.Status}. Prime-set prices appear after the initial sweep."
+            : string.Join('\n', pageRows.Select((row, offset) =>
+                $"**{(saved.Page - 1) * PageSize + offset + 1}. {row.Name}** · {PriceLabel(row.Estimate.Price)}"));
+        if (description.Length == 0) description = "No Prime sets are available in the current market catalog.";
+        if (!market.IsBootstrapping && market.ReadyBooks > 0)
+            description += $"\n\nSorted by estimated sell price, highest first. Select a set to see its current price basis.\nPage **{saved.Page}/{totalPages}** · {rows.Length} Prime sets · market {market.Status}.";
+        description = description.Length <= 4096 ? description : description[..4093] + "…";
+        const string title = "💎 Prime Set Prices · Highest First";
+        var hash = Hash(ComponentRevision, title, description, saved.Page.ToString(), saved.SelectedRelic ?? "");
+        if (saved.MessageId != 0 && saved.RenderHash == hash && !saved.CleanupPending) return;
+        var embed = new EmbedBuilder().WithTitle(title).WithDescription(description).WithColor(new Color(0xB084F5)).Build();
+        var options = pageRows.Select(row => new SelectMenuOptionBuilder(row.Name, row.Name,
+            PriceLabel(row.Estimate.Price), isDefault: row.Name.Equals(saved.SelectedRelic, StringComparison.OrdinalIgnoreCase))).ToList();
+        if (options.Count == 0) options.Add(new SelectMenuOptionBuilder("No Prime sets available", "__none__"));
+        var controls = new ComponentBuilder()
+            .WithButton("◀ Prev", $"rf-list:prev:{PrimeSetPricesKey}", ButtonStyle.Secondary, disabled: saved.Page <= 1)
+            .WithButton("Next ▶", $"rf-list:next:{PrimeSetPricesKey}", ButtonStyle.Secondary, disabled: saved.Page >= totalPages)
+            .WithSelectMenu($"rf-list:select:{PrimeSetPricesKey}", options, "Select a Prime set…", disabled: pageRows.Length == 0, row: 1).Build();
+        var old = saved.MessageId == 0 ? null : await channel.GetMessageAsync(saved.MessageId) as IUserMessage;
+        if (old is null) { var sent = await channel.SendMessageAsync(embed: embed, components: controls, allowedMentions: AllowedMentions.None); saved.MessageId = sent.Id; }
+        else await old.ModifyAsync(p => { p.Embed = embed; p.Components = controls; p.AllowedMentions = AllowedMentions.None; });
+        saved.RenderHash = hash;
+        if (saved.CleanupPending) { await DiscordCleanup.BotMessagesAsync(channel, botUserId, saved.MessageId); saved.CleanupPending = false; }
+    }
+
+    private async Task ShowPrimeSetAsync(SocketMessageComponent interaction, string selected)
+    {
+        if (!market.PrimeSetNames.Contains(selected, StringComparer.OrdinalIgnoreCase))
+        { await interaction.FollowupAsync("That Prime set is no longer in the market catalog.", ephemeral: true); return; }
+        var estimate = market.RewardEstimate(selected);
+        var description = $"Estimated sell price **{PriceLabel(estimate.Price)}**\nOnline floor **{PriceLabel(estimate.OnlineFloor)}** · recent-visible median **{PriceLabel(estimate.RecentVisibleMedian)}** · {estimate.VisibleAsks} visible asks.";
+        var embed = new EmbedBuilder().WithTitle($"💎 {selected}").WithDescription(description)
+            .WithColor(new Color(0xB084F5)).WithFooter("Prices are current sell asks, not completed trades.").Build();
+        await interaction.FollowupAsync(embed: embed, ephemeral: true, allowedMentions: AllowedMentions.None);
+    }
     private async Task UpdateGuideAsync(SocketGuild guild, ulong botUserId)
     {
         var saved = ListState(guild.Id, GuideKey); var channel = guild.GetTextChannel(saved.ChannelId) ?? throw new InvalidOperationException($"#{GuideKey} is missing; run setup again.");
@@ -320,10 +383,10 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             .AddField("Ducat farming", "Expected ducats weights every reward's ducat value by its drop chance. Ducats per platinum compares that expected ducat return with the relic cost; higher is better.")
             .AddField("Open, sell or radshare", "**Show drops** compares the selected relic's current exact-refinement sell ask with reward EV. Its 1–4-player lines show the chance of at least one rare reward and the expected best reward **one player** may choose from the squad's independent drops. This is not total group revenue or guaranteed profit; missing/stale reward prices suppress the comparison.")
             .AddField("What each channel sorts", "**Best Overall** combines expected profit, capped ROI, win chance and risk. **Expected Profit** sorts average platinum gain. **Best ROI** sorts raw percentage return; lower risk and higher profit break ties. **Best Win Chance** sorts the probability that one opening finishes above total cost, highest first. **Best Plat/Trace** favors value per trace. **Cheapest** sorts acquisition cost. **Best Ducat Farming** favors expected ducats per platinum. **Guaranteed Profit** excludes every relic whose worst reward is not profitable, then sorts worst-case profit. **Lowest Risk** sorts risk upward.")
-            .AddField("Using the controls", "Use **Prev/Next** to change pages, choose a relic, then **Show drops** or **/w seller**. In **#prime-part-prices**, choose a part to see its price and every source relic. Drop rows sort Rare → Uncommon → Common, then price and name. Controls reply privately. Managers can change ranking filters with `/rf-panel config`.")
+            .AddField("Using the controls", "Use **Prev/Next** to change pages, choose a relic, then **Show drops** or **/w seller**. In **#prime-part-prices**, choose a part to see its price and every source relic; **#prime-set-prices** lists complete sets by current ask. Drop rows sort Rare → Uncommon → Common, then price and name. Controls reply privately. Managers can change ranking filters with `/rf-panel config`.")
             .AddField("Freshness and efficiency", "Warframe.market books reconcile continuously across five minutes. The first REST pass has priority over Riven scanning. Full snapshots are shared for 10 seconds (1 during bootstrap), **Show drops** reads only six books, and Prime selections acknowledge before looking up one part. Controls run outside the gateway task, `/rf-status` performs no full snapshot, and three command workers keep requests moving. THE LIST writes only when visible results change. WebSocket updates help but cannot replace REST or API limits.")
             .WithFooter("Market asks can change or disappear. RelicFrame never contacts sellers or performs trades.").Build();
-        const string guideRevision = "the-list-guide-2026-09-19-open-sell-squad-v11";
+        const string guideRevision = "the-list-guide-2026-09-20-prime-sets-v12";
         if (saved.MessageId != 0 && saved.RenderHash == guideRevision && !saved.CleanupPending) return;
         var old = saved.MessageId == 0 ? null : await channel.GetMessageAsync(saved.MessageId) as IUserMessage;
         if (old is null) { var sent = await channel.SendMessageAsync(embed: embed, allowedMentions: AllowedMentions.None); saved.MessageId = sent.Id; }
@@ -339,6 +402,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             var guild = bot.GetGuild(targetGuild) ?? throw new InvalidOperationException("Configured server unavailable.");
             var member = CurrentBotMember(guild) ?? throw new InvalidOperationException("Discord has not loaded this bot's server membership yet.");
             if (key == PrimePricesKey) { await UpdatePrimePricesAsync(guild, member.Id, market.Snapshot(Refinement.Radiant)); Save(); return; }
+            if (key == PrimeSetPricesKey) { await UpdatePrimeSetPricesAsync(guild, member.Id); Save(); return; }
             var saved = ListState(targetGuild, key); var tier = Enum.TryParse<Refinement>(saved.Refinement, true, out var parsed) ? parsed : Refinement.Radiant;
             var snapshot = market.Snapshot(tier);
             var rows = snapshot.ReadyBooks == 0 ? [] : relics.Values.Where(relic => relic.Vaulted is true)
@@ -360,7 +424,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
         var parts = payload.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var knownActions = new HashSet<string>(["prev", "next", "drops", "buy", "select"], StringComparer.Ordinal);
         action = parts.FirstOrDefault(knownActions.Contains) ?? "";
-        key = parts.FirstOrDefault(part => Lists.ContainsKey(part) || part == PrimePricesKey) ?? "";
+        key = parts.FirstOrDefault(part => Lists.ContainsKey(part) || part is PrimePricesKey or PrimeSetPricesKey) ?? "";
 
         // The first Prime-price panel briefly shipped with these two layouts. Keep
         // them readable so a click made while the bot is replacing that message is
@@ -389,8 +453,8 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             await interaction.RespondAsync("This list menu is obsolete. Use the controls on the current ranking message.", ephemeral: true); return;
         }
         var selected = interaction.Data.Values.FirstOrDefault();
-        if (selected is null || selected == "__none__") { await interaction.RespondAsync(key == PrimePricesKey ? "No Prime part is available on this page." : "No relic is available on this page.", ephemeral: true); return; }
-        await interaction.DeferAsync(ephemeral: key == PrimePricesKey);
+        if (selected is null || selected == "__none__") { await interaction.RespondAsync(key switch { PrimePricesKey => "No Prime part is available on this page.", PrimeSetPricesKey => "No Prime set is available on this page.", _ => "No relic is available on this page." }, ephemeral: true); return; }
+        await interaction.DeferAsync(ephemeral: key is PrimePricesKey or PrimeSetPricesKey);
         DispatchComponent(interaction, HandleSelectAsync);
     }
     private static void DispatchComponent(SocketMessageComponent interaction, Func<SocketMessageComponent, Task> handler)
@@ -421,6 +485,11 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             if (selected is null || selected == "__none__") return;
             var savedPrime = ListState(targetGuild, key); savedPrime.SelectedRelic = selected; Save(); await ShowPrimePartAsync(interaction, selected); return;
         }
+        if (key == PrimeSetPricesKey)
+        {
+            if (selected is null || selected == "__none__") return;
+            var savedSet = ListState(targetGuild, key); savedSet.SelectedRelic = selected; Save(); await ShowPrimeSetAsync(interaction, selected); return;
+        }
         if (selected is null || selected == "__none__" || !relics.ContainsKey(selected)) { await interaction.FollowupAsync("That relic is no longer available on this page.", ephemeral: true); return; }
         var saved = ListState(targetGuild, key); saved.SelectedRelic = selected; Save();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30)); await UpdateSingleAsync(key, timeout.Token);
@@ -435,7 +504,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
             saved.Page = Math.Max(1, saved.Page + (action == "next" ? 1 : -1)); saved.SelectedRelic = null; Save();
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30)); await UpdateSingleAsync(key, timeout.Token); return;
         }
-        if (key == PrimePricesKey) { await interaction.FollowupAsync("Select a Prime part from the menu to view its price and source relics.", ephemeral: true); return; }
+        if (key is PrimePricesKey or PrimeSetPricesKey) { await interaction.FollowupAsync("Select an item from the menu to view its price basis.", ephemeral: true); return; }
         var relicName = saved.SelectedRelic;
         if (relicName is null || !relics.TryGetValue(relicName, out var relic)) { await interaction.FollowupAsync("Select a relic first.", ephemeral: true); return; }
         var tier = Enum.TryParse<Refinement>(saved.Refinement, true, out var parsed) ? parsed : Refinement.Radiant;
@@ -482,6 +551,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
         }
     }
     private static string Price(double? value) => value?.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+    private static string PriceLabel(double? value) => value.HasValue ? $"{Price(value)}p" : "price unavailable";
     private static string Signed(double value) => value.ToString("+0.##;-0.##;0", System.Globalization.CultureInfo.InvariantCulture);
     private static string Percent(double? value) => value?.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "%" ?? "unknown";
     private static string Quantity(double? value) => value.HasValue ? $" ×{value.Value:0.##}" : "";

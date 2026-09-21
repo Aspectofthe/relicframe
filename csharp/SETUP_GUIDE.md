@@ -121,7 +121,7 @@ Run these checks in Discord:
 
 1. `/rf-status` — confirm the gateway is connected and watch initial data loading.
 2. `/rf-world setup` — repair **WARFRAME LIVE**, its guide, and notification roles if any are missing.
-3. `/rf-panel setup` — repair **THE LIST** and its ranking channels.
+3. `/rf-panel setup` — repair **THE LIST**, its ranking channels, **#prime-part-prices**, and **#prime-set-prices**.
 4. `/rf-relics refresh` — start or restart the shared market-price refresh when required.
 
 The bot also creates **PRIME ECONOMY / #aya-planner** and **#baro-investments**. These read Digital Extremes' current vendor manifests; neither requires an account token. The Aya board has buttons to sort by overall return, Prime-part opening EV from `#prime-part-prices`, or intact relic sale ask, each per Aya. It also displays the next Resurgence only when the official feed has revealed its featured Prime sets and dates; future relic stock is not priced before publication. The Baro board shows Ducat/Credit costs, 30-day reported sales/day, and separate rank-zero/max-rank mod values. Its buttons sort by sales/day, value per 100 Ducats, or value per 100,000 Credits. Those resource-efficiency numbers are gross value, not profit, unless you set both `RELICFRAME_DUCAT_COST_PLAT` (p/Ducat) and `RELICFRAME_CREDIT_COST_PLAT_PER_100K` (p/100,000 Credits) to your own opportunity costs. Max-rank profit is not estimated without Endo/ranking costs.

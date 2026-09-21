@@ -169,8 +169,9 @@ public sealed class LiveMarket : IAsyncDisposable
             // Load every known reward book from both Vaulted and Unvaulted relics. Display
             // filtering belongs to THE LIST; Personal Market reuses these same part prices.
             lock (requiredGate)
-                required = required.Concat(relics.Values.SelectMany(r => r.Rewards.Select(reward => Resolve(reward.RewardName)).Append(Resolve(r.RelicName, true)))
-                    .Where(s => s is not null).Select(s => s!)).Distinct().Order(StringComparer.Ordinal).ToArray();
+                required = required.Concat(primeSetNames.Select(name => Resolve(name)))
+                    .Concat(relics.Values.SelectMany(r => r.Rewards.Select(reward => Resolve(reward.RewardName)).Append(Resolve(r.RelicName, true))))
+                    .Where(s => s is not null).Select(s => s!).Distinct().Order(StringComparer.Ordinal).ToArray();
             Directory.CreateDirectory(bookCachePath);
             foreach (var slug in required)
             {
