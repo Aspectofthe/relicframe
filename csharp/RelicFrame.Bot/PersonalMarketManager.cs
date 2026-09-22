@@ -20,6 +20,8 @@ internal sealed record PersonalMarketState
     public Dictionary<string, int> ManagedOrderQuantities { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> ManagedOrderPrices { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> PendingSoldQuantities { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ObservedInventoryDecrease> RecentInventoryDecreases { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ObservedInventoryDecrease> RecentOrderReductions { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> UnmatchedAlecaSaleQuantities { get; set; } = new(StringComparer.Ordinal);
     public DateTimeOffset? AlecaTradeWatermark { get; set; }
     public string[] ProcessedAlecaTradeIds { get; set; } = [];
@@ -103,6 +105,8 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         state.ManagedOrderIds ??= new(StringComparer.Ordinal); state.LastInventory ??= new(StringComparer.OrdinalIgnoreCase);
         state.ManagedOrderQuantities ??= new(StringComparer.Ordinal); state.ManagedOrderPrices ??= new(StringComparer.Ordinal);
         state.PendingSoldQuantities ??= new(StringComparer.Ordinal);
+        state.RecentInventoryDecreases ??= new(StringComparer.Ordinal);
+        state.RecentOrderReductions ??= new(StringComparer.Ordinal);
         state.UnmatchedAlecaSaleQuantities ??= new(StringComparer.Ordinal);
         state.ProcessedAlecaTradeIds ??= [];
         state.SaleHistory ??= []; state.LastActions ??= [];
@@ -490,19 +494,21 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         if (trades.Count == 0) return [];
 
         var processed = state.ProcessedAlecaTradeIds.ToHashSet(StringComparer.Ordinal);
-        if (!state.AlecaTradeWatermark.HasValue)
+        var firstSync = !state.AlecaTradeWatermark.HasValue;
+        if (firstSync)
         {
-            var latest = trades.Max(row => row.Timestamp);
-            state.AlecaTradeWatermark = latest;
-            state.ProcessedAlecaTradeIds = trades.Where(row => row.Timestamp == latest).Select(row => row.Id).Distinct(StringComparer.Ordinal).TakeLast(1000).ToArray();
-            Save();
-            return ["• AlecaFrame completed-trade feed connected; existing history was baselined without changing inventory."];
+            state.AlecaTradeWatermark = TradeInventoryCache.FirstTradeWatermark(
+                new DateTimeOffset(File.GetLastWriteTimeUtc(inventoryPath), TimeSpan.Zero), DateTimeOffset.UtcNow).AddTicks(1);
+            // Historical trades already reflected in the source inventory must
+            // not be deducted. Recent trades newer than that source are handled
+            // by the normal loop below, including on the first successful poll.
         }
 
         var ownedIds = rawInventory.Select(ItemIdForInventory).OfType<string>().ToHashSet(StringComparer.Ordinal);
         var actions = new List<string>();
         var observedNew = false;
-        foreach (var trade in trades.Where(row => row.Timestamp >= state.AlecaTradeWatermark.Value && !processed.Contains(row.Id)))
+        var watermark = state.AlecaTradeWatermark.GetValueOrDefault();
+        foreach (var trade in trades.Where(row => row.Timestamp >= watermark && !processed.Contains(row.Id)))
         {
             observedNew = true;
             processed.Add(trade.Id);
@@ -517,17 +523,25 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 setDefinitions.Any(set => set.SetItemId == row.ItemId))).ToArray();
             foreach (var sold in mapped)
             {
-                AddPendingSale(sold.ItemId!, sold.Item.Quantity);
-                state.UnmatchedAlecaSaleQuantities[sold.ItemId!] = state.UnmatchedAlecaSaleQuantities.GetValueOrDefault(sold.ItemId!) + sold.Item.Quantity;
+                var stillInCache = TradeInventoryCache.QuantityStillInCache(sold.ItemId!, sold.Item.Quantity,
+                    trade.Timestamp, state.RecentInventoryDecreases, setDefinitions);
+                AddPendingSale(sold.ItemId!, stillInCache);
+                var unmatchedOrderQuantity = TradeInventoryCache.QuantityStillInCache(sold.ItemId!, sold.Item.Quantity,
+                    trade.Timestamp, state.RecentOrderReductions, []);
+                if (unmatchedOrderQuantity > 0)
+                    state.UnmatchedAlecaSaleQuantities[sold.ItemId!] =
+                        state.UnmatchedAlecaSaleQuantities.GetValueOrDefault(sold.ItemId!) + unmatchedOrderQuantity;
                 var priceEach = mapped.Length == 1 ? Math.Max(0, trade.TotalPlatinum / sold.Item.Quantity) : 0;
                 state.SaleHistory = state.SaleHistory.Append(new(sold.ItemId!, sold.Name, "alecaframe:" + trade.Id[..12],
                     sold.Item.Quantity, priceEach, trade.Timestamp)).OrderByDescending(row => row.DetectedAt).Take(100).ToArray();
-                actions.Add($"• AlecaFrame completed sale: removed **{sold.Name}** ×{sold.Item.Quantity} from available inventory immediately.");
+                actions.Add(stillInCache > 0
+                    ? $"• AlecaFrame completed sale: removed **{sold.Name}** ×{stillInCache} from cached available inventory."
+                    : $"• AlecaFrame completed sale of **{sold.Name}** ×{sold.Item.Quantity} was already reflected in the inventory cache.");
             }
         }
         state.ProcessedAlecaTradeIds = trades.Where(row => row.Timestamp == state.AlecaTradeWatermark && processed.Contains(row.Id))
             .Select(row => row.Id).Distinct(StringComparer.Ordinal).Take(1000).ToArray();
-        if (observedNew) Save();
+        if (observedNew || firstSync) Save();
         return actions;
     }
 
@@ -544,6 +558,9 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
     private List<string> ReconcileAlecaSnapshot(IReadOnlyList<PrimeInventoryEntry> rawInventory)
     {
         var actions = new List<string>();
+        var now = DateTimeOffset.UtcNow;
+        TradeInventoryCache.ForgetOldDecreases(state.RecentInventoryDecreases, now);
+        TradeInventoryCache.ForgetOldDecreases(state.RecentOrderReductions, now);
         var current = rawInventory.ToDictionary(row => row.GameRef, row => row.Quantity, StringComparer.OrdinalIgnoreCase);
         var decreasesByItemId = new Dictionary<string, int>(StringComparer.Ordinal);
         if (state.LastInventory.Count > 0)
@@ -557,11 +574,20 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 var itemId = ItemIdForInventory(row);
                 if (itemId is null) continue;
                 decreasesByItemId[itemId] = decreasesByItemId.GetValueOrDefault(itemId) + decrease;
-                if (!state.PendingSoldQuantities.TryGetValue(itemId, out var pending) || pending <= 0) continue;
-                var cleared = Math.Min(pending, decrease);
-                if (cleared >= pending) state.PendingSoldQuantities.Remove(itemId);
-                else state.PendingSoldQuantities[itemId] = pending - cleared;
-                actions.Add($"• AlecaFrame refreshed; cleared {cleared} stale sold-item deduction for **{market.NameForItemId(itemId) ?? "Prime item"}**.");
+                var pending = state.PendingSoldQuantities.GetValueOrDefault(itemId);
+                var cleared = Math.Min(Math.Max(0, pending), decrease);
+                if (cleared > 0)
+                {
+                    if (cleared >= pending) state.PendingSoldQuantities.Remove(itemId);
+                    else state.PendingSoldQuantities[itemId] = pending - cleared;
+                    actions.Add($"• AlecaFrame refreshed; cleared {cleared} stale sold-item deduction for **{market.NameForItemId(itemId) ?? "Prime item"}**.");
+                }
+                // Keep the full change as evidence for a late trade-feed event,
+                // including stock already suppressed by an order reduction.
+                var previousDecrease = state.RecentInventoryDecreases.GetValueOrDefault(itemId);
+                var total = previousDecrease is not null && now - previousDecrease.ObservedAt <= TimeSpan.FromHours(2)
+                    ? previousDecrease.Quantity + decrease : decrease;
+                state.RecentInventoryDecreases[itemId] = new(total, now);
             }
             foreach (var pendingAleca in state.UnmatchedAlecaSaleQuantities.ToArray())
             {
@@ -621,6 +647,11 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 if (newlyObserved > 0)
                 {
                     AddPendingSale(managed.Key, newlyObserved);
+                    var previousReduction = state.RecentOrderReductions.GetValueOrDefault(managed.Key);
+                    var now = DateTimeOffset.UtcNow;
+                    var total = previousReduction is not null && now - previousReduction.ObservedAt <= TimeSpan.FromHours(2)
+                        ? previousReduction.Quantity + newlyObserved : newlyObserved;
+                    state.RecentOrderReductions[managed.Key] = new(total, now);
                     var price = state.ManagedOrderPrices.GetValueOrDefault(managed.Key, current!.Platinum);
                     var sale = new PersonalMarketSale(managed.Key, name, managed.Value, newlyObserved, price, DateTimeOffset.UtcNow);
                     state.SaleHistory = state.SaleHistory.Append(sale).OrderByDescending(row => row.DetectedAt).Take(100).ToArray();

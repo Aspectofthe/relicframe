@@ -152,6 +152,24 @@ var distantPlan = PrimeSetListingPlan.Build([new("distant-blueprint", "Distant P
     [distantDefinition], new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Distant Prime Set" }, true, true);
 Assert(distantPlan.Sellable is [{ ItemId: "distant-blueprint", Quantity: 1 }],
     "completion protection does not reserve parts for sets missing two or more component types");
+var tradeTime = new DateTimeOffset(2026, 9, 22, 18, 0, 0, TimeSpan.Zero);
+var recentDecrease = new Dictionary<string, ObservedInventoryDecrease> { ["blade"] = new(1, tradeTime.AddMinutes(1)) };
+Assert(TradeInventoryCache.QuantityStillInCache("blade", 1, tradeTime, recentDecrease, []) == 0
+    && recentDecrease.Count == 0,
+    "a trade reported after the inventory cache refresh is not subtracted twice");
+Assert(TradeInventoryCache.QuantityStillInCache("blade", 1, tradeTime,
+    new Dictionary<string, ObservedInventoryDecrease> { ["blade"] = new(1, tradeTime.AddHours(-3)) }, []) == 1,
+    "unrelated older inventory decreases do not hide later owned stock");
+Assert(TradeInventoryCache.FirstTradeWatermark(tradeTime, tradeTime.AddMinutes(10)) == tradeTime,
+    "first trade sync processes sales newer than the inventory source snapshot");
+var setDecrease = new Dictionary<string, ObservedInventoryDecrease>
+{
+    ["blueprint"] = new(1, tradeTime.AddMinutes(1)),
+    ["blade"] = new(2, tradeTime.AddMinutes(1))
+};
+Assert(TradeInventoryCache.QuantityStillInCache("set", 1, tradeTime, setDecrease, [listingDefinition]) == 0
+    && setDecrease.Count == 0,
+    "a delayed completed-set trade consumes matching component changes without deducting the set twice");
 var ayaRanking = new AyaValueRow[]
 {
     new("Lith A1 Relic", 1, 10, 40, "Alpha Prime Blueprint", 100, 2),
