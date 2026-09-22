@@ -143,6 +143,15 @@ var unprotectedPlan = PrimeSetListingPlan.Build(partialStock, [listingDefinition
 Assert(unprotectedPlan.Sellable.Single(row => row.ItemId == "blueprint").Quantity == 3
     && unprotectedPlan.Sellable.Single(row => row.ItemId == "blade").Quantity == 1,
     "completion protection can be disabled without changing complete-set mode");
+var distantDefinition = new PrimeSetDefinition("distant-set", "Distant Prime Set", [
+    new("distant-blueprint", "Distant Prime Blueprint", 1),
+    new("distant-barrel", "Distant Prime Barrel", 1),
+    new("distant-stock", "Distant Prime Stock", 1)
+]);
+var distantPlan = PrimeSetListingPlan.Build([new("distant-blueprint", "Distant Prime Blueprint", 1)],
+    [distantDefinition], new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Distant Prime Set" }, true, true);
+Assert(distantPlan.Sellable is [{ ItemId: "distant-blueprint", Quantity: 1 }],
+    "completion protection does not reserve parts for sets missing two or more component types");
 var ayaRanking = new AyaValueRow[]
 {
     new("Lith A1 Relic", 1, 10, 40, "Alpha Prime Blueprint", 100, 2),
@@ -368,13 +377,15 @@ finally { File.Delete(alecaFixture); }
 using (var tradeHistoryFixture = JsonDocument.Parse("""
     {"trades":[
       {"ts":"2026-09-17T12:00:00Z","tx":[{"name":"/Lotus/TestPrimeReceiver","displayName":"Test Prime Receiver","cnt":2,"rank":0}],"rx":[],"type":0,"totalPlat":40},
-      {"ts":"2026-09-17T12:01:00Z","tx":[],"rx":[{"name":"/Lotus/TestPrimeBlueprint","displayName":"Test Prime Blueprint","cnt":1,"rank":0}],"type":1,"totalPlat":10}
+      {"ts":"2026-09-17T12:01:00Z","tx":[],"rx":[{"name":"/Lotus/TestPrimeBlueprint","displayName":"Test Prime Blueprint","cnt":1,"rank":null}],"type":1,"totalPlat":null}
     ]}
     """))
 {
     var trades = AlecaTradeHistory.Parse(tradeHistoryFixture.RootElement);
     Assert(trades.Count == 2 && trades[0].IsSale && !trades[1].IsSale && trades[0].Sent is [{ DisplayName: "Test Prime Receiver", Quantity: 2 }],
         "AlecaFrame trade history identifies completed outgoing sales and their exact item quantities");
+    Assert(trades[1].TotalPlatinum == 0 && trades[1].Received is [{ Rank: 0 }],
+        "AlecaFrame trade history tolerates null optional numeric values without dropping the completed-trade feed");
     var repeated = AlecaTradeHistory.Parse(tradeHistoryFixture.RootElement);
     Assert(trades.Select(row => row.Id).SequenceEqual(repeated.Select(row => row.Id)),
         "AlecaFrame completed trades receive stable identifiers so the same sale cannot be deducted twice");

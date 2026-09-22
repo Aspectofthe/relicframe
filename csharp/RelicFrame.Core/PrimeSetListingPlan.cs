@@ -47,7 +47,16 @@ public sealed record PrimeSetListingPlan(IReadOnlyList<PrimeSetStock> Sellable,
         {
             foreach (var definition in knownSets.Where(row => protectedSetNames.Contains(row.SetName)))
             {
-                // Reserve one incomplete set's owned components, not all copies.
+                // "Close to completion" means exactly one required component type
+                // is still missing after complete sets have been allocated. Do not
+                // lock parts inside sets that are missing two or more component types.
+                var missingTypes = definition.Components.Count(part =>
+                    counts.GetValueOrDefault(part.ItemId) < Math.Max(1, part.Quantity));
+                var ownedUnits = definition.Components.Sum(part =>
+                    Math.Min(counts.GetValueOrDefault(part.ItemId), Math.Max(1, part.Quantity)));
+                if (missingTypes != 1 || ownedUnits == 0) continue;
+
+                // Reserve one near-complete set's owned components, not all copies.
                 foreach (var part in definition.Components)
                 {
                     var owned = counts.GetValueOrDefault(part.ItemId);

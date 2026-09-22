@@ -273,9 +273,11 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         var listingPlan = new PrimeSetListingPlan([], new Dictionary<string, int>(StringComparer.Ordinal));
         if (marketUsable)
         {
-            var topSets = state.ProtectIncompleteSets
-                ? (await setCompletion.AnalyzeAsync(inventory, ownSellerSlug, null, ct, requireComplete: true)).Take(10)
-                    .Select(row => row.SetName).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            // Consider every represented set rather than only the profit top 10.
+            // PrimeSetListingPlan narrows this collection to sets exactly one required
+            // component type away, after complete sets have already been allocated.
+            var protectedSets = state.ProtectIncompleteSets
+                ? setDefinitions.Select(row => row.SetName).ToHashSet(StringComparer.OrdinalIgnoreCase)
                 : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var stock = inventory.Select(row => new
             {
@@ -283,7 +285,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 Name = !string.IsNullOrWhiteSpace(row.ItemName) ? row.ItemName : market.NameForGameRef(row.GameRef)
             }).Where(row => row.ItemId is not null && row.Name is not null)
               .Select(row => new PrimeSetStock(row.ItemId!, row.Name!, row.Item.Quantity));
-            listingPlan = PrimeSetListingPlan.Build(stock, setDefinitions, topSets,
+            listingPlan = PrimeSetListingPlan.Build(stock, setDefinitions, protectedSets,
                 state.SellCompleteSets, state.ProtectIncompleteSets);
             if (listingPlan.Sellable.Any(row => setDefinitions.Any(set => set.SetItemId == row.ItemId)))
                 await market.RefreshBooksAsync(listingPlan.Sellable.Where(row => setDefinitions.Any(set => set.SetItemId == row.ItemId))
@@ -334,7 +336,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             : string.Join('\n', rows);
         var mode = state.AutoPublishEnabled == true ? "AUTO LISTING ENABLED" : "AUTO LISTING PAUSED";
         description += $"\n\n**{mode}.** Minimum {minimumPrice}p · undercut {undercut}p · stabilized online/recent-visible price · owner listing excluded: {(ownSellerSlug.Length > 0 ? "yes" : "no; set RELICFRAME_WFM_USER_SLUG")} · inventory file <t:{new DateTimeOffset(sourceAge).ToUnixTimeSeconds()}:R>.";
-        description += $"\n**Complete sets:** {(state.SellCompleteSets ? "sell sets and only surplus parts" : "sell parts separately")} · **incomplete top-10 sets:** {(state.ProtectIncompleteSets ? "reserve one completion's owned parts" : "sell unreserved parts")}.";
+        description += $"\n**Complete sets:** {(state.SellCompleteSets ? "sell sets and only surplus parts" : "sell parts separately")} · **sets one component type away:** {(state.ProtectIncompleteSets ? "reserve one completion's owned parts; sell only extras" : "sell their parts")}.";
         var belowFloor = assessed.Where(row => row.Quote is null && row.Best is not null && row.Best.Price < minimumPrice)
             .OrderByDescending(row => row.Best!.Price).ThenBy(row => row.Item.ItemName, StringComparer.OrdinalIgnoreCase).ToArray();
         var noAsk = assessed.Count(row => row.Quote is null && row.Best is null);

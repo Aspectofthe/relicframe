@@ -53,7 +53,7 @@ public static class AlecaTradeHistory
     }
 
     private static int Integer(JsonElement row, string name)
-        => TryProperty(row, name, out var value) && value.TryGetInt32(out var result) ? result : 0;
+        => TryProperty(row, name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var result) ? result : 0;
 
     private static string String(JsonElement row, string name)
         => TryProperty(row, name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString()?.Trim() ?? "" : "";
