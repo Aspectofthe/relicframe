@@ -286,6 +286,15 @@ public sealed class LiveMarket : IAsyncDisposable
             ? book.Match(null, true, Blacklist.Snapshot, excludedSellerSlug, sellerStatus: "ingame")
             : new([], false);
     }
+    public double? PersonalMarketListingReference(string name, string? excludedSellerSlug = null)
+    {
+        // Match the actionable WTS view first. If nobody is currently in game,
+        // fall back to broader online evidence and finally the stabilized book.
+        var ingame = MatchPersonalMarket(name, excludedSellerSlug).Best?.Price;
+        if (ingame.HasValue) return ingame;
+        var estimate = RewardEstimate(name, excludedSellerSlug);
+        return estimate.OnlineFloor ?? estimate.Price;
+    }
     public RewardPriceEstimate RewardEstimate(string name, string? excludedSellerSlug = null)
     {
         var online = Match(name, null, true, excludedSellerSlug: excludedSellerSlug); var onlineFloor = online.Best?.Price;

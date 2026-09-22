@@ -342,6 +342,8 @@ try
     Assert(inventory.Count == 2 && inventory.Single(row => row.GameRef.EndsWith("PrimeBlueprint")).Quantity == 2, "Prime inventory accepts AlecaFrame-style nested InventoryJson");
     var quote = PrimeInventory.Quote(inventory[0], "Example Prime Blueprint", new OrderMatch([new(15, 1, Seller: "Self", SellerSlug: "self"), new(16, 1, Seller: "Other")], false), 10, 3);
     Assert(quote is { LowestAsk: 15, DraftPrice: 12, Quantity: 2 }, "personal market proposal respects minimum, quantity and 1-3p undercut");
+    Assert(PrimeInventory.Quote(inventory[0], "Example Prime Blueprint", 15.5, "Other", 10, 1) is { LowestAsk: 16, DraftPrice: 15 },
+        "fractional unit prices cannot make the Personal Market undercut by more than configured");
     Assert(PrimeInventory.Quote(inventory[0], "Example Prime Blueprint", new OrderMatch([new(9, 1, Seller: "Other")], false), 10, 1) is null,
         "personal market skips a valid cheapest ask below the configured floor instead of posting an uncompetitive order");
 }
@@ -817,7 +819,11 @@ var retryHandler = new RetryHandler();
             "an Unvaulted reward price is available from the scanner cache without a second Personal Market request");
         Assert(market.MatchPersonalMarket("Personal Prime Blueprint").Entries is [{ Seller: "GoodSeller", SellerStatus: "ingame" }],
             "legacy immediate-whisper matching remains available for interactive views");
+        Assert(market.PersonalMarketListingReference("Personal Prime Blueprint") == 14,
+            "Personal Market listing reference follows the actionable in-game WTS floor instead of a lower blended estimate");
         var ownerExcluded = market.RewardEstimate("Personal Prime Blueprint", "good");
+        Assert(market.PersonalMarketListingReference("Personal Prime Blueprint", "good") == 4,
+            "Personal Market falls back to stabilized evidence when the owner is the only in-game seller");
         var stableQuote = PrimeInventory.Quote(new PrimeInventoryEntry("personal", 2), "Personal Prime Blueprint", ownerExcluded.Price, "stabilized market", 4, 1);
         Assert(ownerExcluded is { Price: 4, OnlineFloor: null, RecentVisibleMedian: 3.5 } && stableQuote is { Quantity: 2, DraftPrice: 4 },
             "Personal Market excludes the owner's listing and can quote from stable recent-visible evidence when nobody else is online");

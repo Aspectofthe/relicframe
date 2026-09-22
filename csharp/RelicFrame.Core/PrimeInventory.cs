@@ -97,7 +97,10 @@ public static class PrimeInventory
         if (string.IsNullOrWhiteSpace(itemName) || inventory.Quantity < 1 || !referencePrice.HasValue ||
             !(itemName.Contains(" Prime ", StringComparison.OrdinalIgnoreCase) || itemName.EndsWith(" Prime", StringComparison.OrdinalIgnoreCase)) ||
             !double.IsFinite(referencePrice.Value) || referencePrice.Value < minimumPrice) return null;
-        var lowest = Math.Max(1, (int)Math.Floor(referencePrice.Value));
+        // Market orders require whole platinum. Ceiling ensures a fractional unit
+        // price can never make the resulting order more than the configured number
+        // of platinum below the reference listing.
+        var lowest = Math.Max(1, (int)Math.Ceiling(referencePrice.Value));
         var draft = Math.Max(minimumPrice, lowest - Math.Clamp(undercut, 1, 3));
         return new(itemName, inventory.GameRef, inventory.Quantity, lowest, draft, referenceSeller);
     }

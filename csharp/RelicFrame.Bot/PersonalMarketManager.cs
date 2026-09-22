@@ -302,9 +302,13 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             var bookFresh = market.IsBookFresh(row.Name!, TimeSpan.FromMinutes(10));
             var estimate = bookFresh ? market.RewardEstimate(row.Name!, ownSellerSlug) : new RewardPriceEstimate(null, null, null, 0, false);
             var visible = market.Match(row.Name!, null, false, excludedSellerSlug: ownSellerSlug).Entries;
-            var reference = estimate.Price.HasValue ? visible.MinBy(entry => Math.Abs(entry.Price - estimate.Price.Value)) : null;
-            var best = estimate.Price.HasValue ? new OrderEntry(estimate.Price.Value, reference?.Quantity, Seller: reference?.Seller ?? "stabilized market") : null;
-            return new { row.Item, Name = row.Name!, Best = best, Quote = PrimeInventory.Quote(row.Item, row.Name, estimate.Price, best?.Seller ?? "", minimumPrice, undercut), BookFresh = bookFresh };
+            // Undercut the actionable in-game WTS competitor shown by the market UI,
+            // not a cheaper merely-online/offline order or a blended valuation.
+            var listingReference = bookFresh ? market.PersonalMarketListingReference(row.Name!, ownSellerSlug) : null;
+            var reference = listingReference.HasValue ? visible.MinBy(entry => Math.Abs(entry.Price - listingReference.Value)) : null;
+            var best = listingReference.HasValue ? new OrderEntry(listingReference.Value, reference?.Quantity,
+                Seller: reference?.Seller ?? "market reference") : null;
+            return new { row.Item, Name = row.Name!, Best = best, Quote = PrimeInventory.Quote(row.Item, row.Name, listingReference, best?.Seller ?? "", minimumPrice, undercut), BookFresh = bookFresh };
         }).ToArray();
         var quotes = assessed.Select(row => row.Quote).OfType<PersonalMarketQuote>().OrderByDescending(row => row.DraftPrice).ThenBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase).ToArray();
         if (state.AutoPublishEnabled == true && marketUsable && orders is not null)
