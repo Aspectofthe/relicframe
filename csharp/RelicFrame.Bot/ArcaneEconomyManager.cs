@@ -32,6 +32,7 @@ internal sealed class ArcaneEconomyManager : IAsyncDisposable
     private readonly ulong targetGuild;
     private readonly string statePath;
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly SemaphoreSlim calculatorRenderGate = new(1, 1);
     private ArcaneEconomyState state;
     private CancellationTokenSource? cancellation;
     private Task? worker;
@@ -189,6 +190,9 @@ internal sealed class ArcaneEconomyManager : IAsyncDisposable
 
     private async Task RenderCalculatorAsync(ITextChannel channel, ArcaneEconomyResult result, bool force)
     {
+        await calculatorRenderGate.WaitAsync();
+        try
+        {
         var dissolve = state.CalculatorMode == "dissolve";
         var sorted = (dissolve
             ? result.Quotes.OrderByDescending(row => Math.Max(row.RankZeroDissolveValue - (row.RankZeroAdjusted ?? 0), row.MaxRankDissolveValue - (row.MaxRankAdjusted ?? 0)))
@@ -209,6 +213,8 @@ internal sealed class ArcaneEconomyManager : IAsyncDisposable
             .WithButton("Best Sells", "arcane-economy:sell", dissolve ? ButtonStyle.Secondary : ButtonStyle.Success)
             .WithButton("Next", "arcane-economy:next", ButtonStyle.Secondary, disabled: state.CalculatorPage >= pages).Build();
         await UpsertAsync(channel, false, embed, components, Hash(embed, state.CalculatorMode + state.CalculatorPage), force);
+        }
+        finally { calculatorRenderGate.Release(); }
     }
 
     private async Task RenderWaitingAsync(ITextChannel channel, bool collections)
@@ -244,16 +250,24 @@ internal sealed class ArcaneEconomyManager : IAsyncDisposable
             try
             {
                 var action = interaction.Data.CustomId["arcane-economy:".Length..];
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = action == "refresh" ? "Refreshing Arcane prices…" : "Updating Vosfor view…");
                 if (action == "prev") state.CalculatorPage--;
                 if (action == "next") state.CalculatorPage++;
                 if (action is "sell" or "dissolve") { state.CalculatorMode = action; state.CalculatorPage = 1; }
-                await UpdateAsync(true, CancellationToken.None);
-                await interaction.FollowupAsync(action == "refresh" ? "Arcane prices refreshed." : "Vosfor view updated.", ephemeral: true);
+                if (action == "refresh") await UpdateAsync(true, CancellationToken.None);
+                else if (Volatile.Read(ref lastResult) is { } cached)
+                {
+                    var channel = bot.GetGuild(targetGuild)?.GetTextChannel(state.CalculatorChannelId)
+                        ?? throw new InvalidOperationException("Vosfor Calculator channel unavailable.");
+                    await RenderCalculatorAsync(channel, cached, false);
+                }
+                else throw new InvalidOperationException("Arcane prices are still loading. Try again when the board is ready.");
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = action == "refresh" ? "Arcane prices refreshed." : "Vosfor view updated.");
             }
             catch (Exception error)
             {
                 Console.WriteLine($"[arcane-economy-button] {error.GetType().Name}: {error.Message}");
-                try { await interaction.FollowupAsync($"Arcane Economy update failed: {error.Message}", ephemeral: true); } catch { }
+                try { await interaction.ModifyOriginalResponseAsync(response => response.Content = $"Arcane Economy update failed: {error.Message}"); } catch { }
             }
         }, CancellationToken.None);
     }
@@ -305,5 +319,5 @@ internal sealed class ArcaneEconomyManager : IAsyncDisposable
     private static string Hash(Embed embed, string stateKey) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(embed.Description + "\0" + embed.Footer?.Text + "\0" + stateKey)));
     private void Save() => Json.WriteAtomic(statePath, state);
     public async Task StopAsync() { if (cancellation is not null) await cancellation.CancelAsync(); if (worker is not null) await worker; status = "stopped"; }
-    public async ValueTask DisposeAsync() { bot.ButtonExecuted -= DispatchButtonAsync; bot.SelectMenuExecuted -= DispatchSelectAsync; await StopAsync(); cancellation?.Dispose(); gate.Dispose(); }
+    public async ValueTask DisposeAsync() { bot.ButtonExecuted -= DispatchButtonAsync; bot.SelectMenuExecuted -= DispatchSelectAsync; await StopAsync(); cancellation?.Dispose(); gate.Dispose(); calculatorRenderGate.Dispose(); }
 }

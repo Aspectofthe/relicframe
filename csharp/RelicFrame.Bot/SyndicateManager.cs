@@ -222,6 +222,7 @@ internal sealed class SyndicateManager : IAsyncDisposable
     {
         try
         {
+            await interaction.ModifyOriginalResponseAsync(response => response.Content = "Updating standing planner…");
             await renderGate.WaitAsync();
             try
             {
@@ -231,9 +232,13 @@ internal sealed class SyndicateManager : IAsyncDisposable
                 if (budget.HasValue) { state.Standing = budget.Value; state.Page = 0; }
             }
             finally { renderGate.Release(); }
-            await RenderAsync(); await interaction.FollowupAsync("Standing planner updated.", ephemeral: true);
+            await RenderAsync(); await interaction.ModifyOriginalResponseAsync(response => response.Content = "Standing planner updated.");
         }
-        catch (Exception e) { Console.WriteLine($"[standing-interaction] {e.GetType().Name}"); }
+        catch (Exception e)
+        {
+            Console.WriteLine($"[standing-interaction] {e}");
+            try { await interaction.ModifyOriginalResponseAsync(response => response.Content = "Standing planner could not be updated. Try again shortly."); } catch { }
+        }
     }
     public async Task StopAsync() { if (cancellation is not null) await cancellation.CancelAsync(); if (worker is not null) await worker; }
     public async ValueTask DisposeAsync()

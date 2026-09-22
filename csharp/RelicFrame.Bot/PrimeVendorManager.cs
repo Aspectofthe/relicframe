@@ -226,10 +226,11 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
         {
             try
             {
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = "Updating vendor ranking…");
                 var mode = interaction.Data.CustomId[(aya ? "aya-sort:" : "baro-sort:").Length..];
                 if (aya && mode is not (AyaProfit.Overall or AyaProfit.PrimeParts or AyaProfit.RelicSale) ||
                     baro && mode is not (BaroEconomy.Sales or BaroEconomy.Ducats or BaroEconomy.Credits))
-                { await interaction.FollowupAsync("Unknown sort.", ephemeral: true); return; }
+                { await interaction.ModifyOriginalResponseAsync(response => response.Content = "Unknown sort."); return; }
                 await gate.WaitAsync();
                 try
                 {
@@ -243,12 +244,12 @@ internal sealed class PrimeVendorManager : IAsyncDisposable
                     await PublishAsync(channel, aya, aya ? "Prime Resurgence · Aya planner" : "Baro · investment watchlist", body, CancellationToken.None);
                 }
                 finally { gate.Release(); }
-                await interaction.FollowupAsync("Ranking updated.", ephemeral: true);
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = "Ranking updated.");
             }
             catch (Exception error)
             {
                 Console.WriteLine($"[vendor-sort] {error}");
-                try { if (interaction.HasResponded) await interaction.FollowupAsync("Could not update the sort; the next refresh will retry.", ephemeral: true); }
+                try { if (interaction.HasResponded) await interaction.ModifyOriginalResponseAsync(response => response.Content = "Could not update the sort; the next refresh will retry."); }
                 catch (Exception replyError) { Console.WriteLine($"[vendor-sort] response failed: {replyError.GetType().Name}"); }
             }
         }, CancellationToken.None);

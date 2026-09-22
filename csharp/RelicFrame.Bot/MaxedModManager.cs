@@ -170,6 +170,7 @@ internal sealed class MaxedModManager : IAsyncDisposable
         {
             try
             {
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = "Updating mod ranking…");
                 var mode = interaction.Data.CustomId["mod-profit:".Length..];
                 await renderGate.WaitAsync();
                 try
@@ -179,9 +180,13 @@ internal sealed class MaxedModManager : IAsyncDisposable
                 }
                 finally { renderGate.Release(); }
                 await RenderAsync();
-                await interaction.FollowupAsync("Mod ranking updated.", ephemeral: true);
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = "Mod ranking updated.");
             }
-            catch (Exception e) { Console.WriteLine($"[mod-profit-interaction] {e.GetType().Name}"); }
+            catch (Exception e)
+            {
+                Console.WriteLine($"[mod-profit-interaction] {e}");
+                try { await interaction.ModifyOriginalResponseAsync(response => response.Content = "Mod ranking could not be updated. Try again shortly."); } catch { }
+            }
         });
     }
 

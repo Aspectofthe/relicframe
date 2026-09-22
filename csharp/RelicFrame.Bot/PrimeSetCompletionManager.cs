@@ -23,11 +23,14 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
     private readonly ulong configuredOwner;
     private readonly string statePath;
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly SemaphoreSlim renderGate = new(1, 1);
     private PrimeSetCompletionState state;
     private CancellationTokenSource? cancellation;
     private Task? worker;
     private string status = "stopped";
-    private readonly Dictionary<string, PrimeCompletionRelic?> completionRelics = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, PrimeCompletionRelic?> completionRelics = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<PrimeSetOpportunity>? cachedRows;
+    private IReadOnlyList<PrimeSetSaleComparison>? cachedComparisons;
     public string Status => Volatile.Read(ref status);
 
     public PrimeSetCompletionManager(DiscordSocketClient bot, LiveMarket market, MarketHttp http,
@@ -112,13 +115,16 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
             var sources = top.SelectMany(row => market.SourceRelics(row.MissingItem)).DistinctBy(relic => relic.RelicName).ToArray();
             await market.RefreshBooksAsync(sources.Select(relic => relic.RelicName + " Relic"),
                 force ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5), ct);
-            completionRelics.Clear();
+            var relics = new Dictionary<string, PrimeCompletionRelic?>(StringComparer.OrdinalIgnoreCase);
             foreach (var row in top)
-                completionRelics[row.SetName] = PrimeSetCompletion.CheapestSourceRelic(market.SourceRelics(row.MissingItem), row.MissingItem,
+                relics[row.SetName] = PrimeSetCompletion.CheapestSourceRelic(market.SourceRelics(row.MissingItem), row.MissingItem,
                     (name, tier) => market.IsBookFresh(name + " Relic", TimeSpan.FromMinutes(10))
                         ? market.Match(name, tier.ToString(), true, relic: true, excludedSellerSlug: personalMarket.ExcludedSellerSlug)
                         : new OrderMatch([], false));
             var comparisons = await completion.ComparePartsAndSetsAsync(inventory, personalMarket.ExcludedSellerSlug, ct);
+            completionRelics = relics;
+            cachedRows = rows;
+            cachedComparisons = comparisons;
             await RenderAsync(channel, rows, null, force, comparisons);
             status = $"ready; {rows.Count} one-component completions; {comparisons.Count} part/set comparisons";
         }
@@ -128,6 +134,9 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
     private async Task RenderAsync(ITextChannel channel, IReadOnlyList<PrimeSetOpportunity> opportunities, string? notice, bool force,
         IReadOnlyList<PrimeSetSaleComparison>? comparisons = null)
     {
+        await renderGate.WaitAsync();
+        try
+        {
         var pages = Math.Max(1, (opportunities.Count + PageSize - 1) / PageSize); state.Page = Math.Clamp(state.Page, 1, pages);
         var rows = opportunities.Skip((state.Page - 1) * PageSize).Take(PageSize).Select((row, index) =>
             $"**{(state.Page - 1) * PageSize + index + 1}. {row.SetName}** · profit **{Signed(row.CompletionProfit)}p**\n" +
@@ -161,6 +170,8 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
         }
         else await old.ModifyAsync(properties => { properties.Embed = embed; properties.Components = components; properties.AllowedMentions = AllowedMentions.None; });
         state.RenderHash = hash; Save();
+        }
+        finally { renderGate.Release(); }
     }
     private string RelicLine(string setName)
         => completionRelics.GetValueOrDefault(setName) is { } relic
@@ -177,15 +188,24 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
         {
             try
             {
+                var refresh = interaction.Data.CustomId.EndsWith(":refresh", StringComparison.Ordinal);
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = refresh ? "Refreshing Prime-set inventory and prices…" : "Updating Prime-set page…");
                 if (interaction.Data.CustomId.EndsWith(":prev", StringComparison.Ordinal)) state.Page--;
                 if (interaction.Data.CustomId.EndsWith(":next", StringComparison.Ordinal)) state.Page++;
-                await UpdateAsync(true, CancellationToken.None);
-                await interaction.FollowupAsync("Prime-set completion inventory and prices refreshed.", ephemeral: true);
+                if (refresh) await UpdateAsync(true, CancellationToken.None);
+                else if (cachedRows is { } rows)
+                {
+                    var channel = bot.GetGuild(targetGuild)?.GetTextChannel(state.ChannelId)
+                        ?? throw new InvalidOperationException("Prime Set Completion channel unavailable.");
+                    await RenderAsync(channel, rows, null, false, cachedComparisons);
+                }
+                else throw new InvalidOperationException("Prime-set completion is still loading. Try again when the board is ready.");
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = refresh ? "Prime-set completion inventory and prices refreshed." : "Prime-set page updated.");
             }
             catch (Exception error)
             {
                 Console.WriteLine($"[prime-set-completion-button] {error.GetType().Name}: {error.Message}");
-                try { await interaction.FollowupAsync($"Prime-set completion refresh failed: {error.Message}", ephemeral: true); } catch { }
+                try { await interaction.ModifyOriginalResponseAsync(response => response.Content = $"Prime-set completion update failed: {error.Message}"); } catch { }
             }
         }, CancellationToken.None);
     }
@@ -193,5 +213,5 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
     private static string Signed(int value) => value >= 0 ? $"+{value}" : value.ToString();
     private void Save() => Json.WriteAtomic(statePath, state);
     public async Task StopAsync() { if (cancellation is not null) await cancellation.CancelAsync(); if (worker is not null) await worker; status = "stopped"; }
-    public async ValueTask DisposeAsync() { bot.ButtonExecuted -= DispatchButtonAsync; await StopAsync(); cancellation?.Dispose(); gate.Dispose(); }
+    public async ValueTask DisposeAsync() { bot.ButtonExecuted -= DispatchButtonAsync; await StopAsync(); cancellation?.Dispose(); gate.Dispose(); renderGate.Dispose(); }
 }

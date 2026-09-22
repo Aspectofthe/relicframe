@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Collections.Concurrent;
 using Discord;
 using Discord.WebSocket;
 using RelicFrame.Core;
@@ -55,6 +56,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
     private readonly ulong targetGuild;
     private readonly string path;
     private readonly SemaphoreSlim update = new(1, 1);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> panelUpdates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim setup = new(1, 1);
     private RelicPanelStore store;
     private CancellationTokenSource? cancellation;
@@ -173,12 +175,12 @@ internal sealed class RelicPanelManager : IAsyncDisposable
                     .Select(r => RelicRow.Compute(r, tier, snapshot.Prices, snapshot.RelicPrices.GetValueOrDefault(r.RelicName) ?? new(), snapshot.Ducats, scope: "Online only"))
                     .Where(r => r.Online.Profit.PriceKnown && r.Online.Cost.HasValue && !r.Online.ZeroQuantity && HasMeaningfulVaultedReward(r, snapshot)).ToArray();
                 foreach (var key in refinementGroup)
-                    try { await UpdateListAsync(guild, botMember.Id, key, tier, snapshot, baseRows, sellerCache); }
+                    try { await WithPanelUpdateAsync(key, ct, () => UpdateListAsync(guild, botMember.Id, key, tier, snapshot, baseRows, sellerCache)); }
                     catch (Exception e) when (e is Discord.Net.HttpException or InvalidOperationException or IOException) { failures.Add($"{key}: {e.GetType().Name}"); }
             }
-            try { await UpdatePrimePricesAsync(guild, botMember.Id, market.Snapshot(Refinement.Radiant)); }
+            try { await WithPanelUpdateAsync(PrimePricesKey, ct, () => UpdatePrimePricesAsync(guild, botMember.Id, market.Snapshot(Refinement.Radiant))); }
             catch (Exception e) when (e is Discord.Net.HttpException or InvalidOperationException or IOException) { failures.Add($"{PrimePricesKey}: {e.GetType().Name}"); }
-            try { await UpdatePrimeSetPricesAsync(guild, botMember.Id); }
+            try { await WithPanelUpdateAsync(PrimeSetPricesKey, ct, () => UpdatePrimeSetPricesAsync(guild, botMember.Id)); }
             catch (Exception e) when (e is Discord.Net.HttpException or InvalidOperationException or IOException) { failures.Add($"{PrimeSetPricesKey}: {e.GetType().Name}"); }
             try { await UpdateGuideAsync(guild, botMember.Id); }
             catch (Exception e) when (e is Discord.Net.HttpException or InvalidOperationException or IOException) { failures.Add($"{GuideKey}: {e.GetType().Name}"); }
@@ -396,8 +398,7 @@ internal sealed class RelicPanelManager : IAsyncDisposable
     }
     private async Task UpdateSingleAsync(string key, CancellationToken ct)
     {
-        await update.WaitAsync(ct);
-        try
+        await WithPanelUpdateAsync(key, ct, async () =>
         {
             var guild = bot.GetGuild(targetGuild) ?? throw new InvalidOperationException("Configured server unavailable.");
             var member = CurrentBotMember(guild) ?? throw new InvalidOperationException("Discord has not loaded this bot's server membership yet.");
@@ -409,8 +410,17 @@ internal sealed class RelicPanelManager : IAsyncDisposable
                 .Select(relic => RelicRow.Compute(relic, tier, snapshot.Prices, snapshot.RelicPrices.GetValueOrDefault(relic.RelicName) ?? new(), snapshot.Ducats, scope: "Online only"))
                 .Where(row => row.Online.Profit.PriceKnown && row.Online.Cost.HasValue && !row.Online.ZeroQuantity && HasMeaningfulVaultedReward(row, snapshot)).ToArray();
             await UpdateListAsync(guild, member.Id, key, tier, snapshot, rows, new(StringComparer.OrdinalIgnoreCase)); Save();
+        });
+    }
+    private async Task WithPanelUpdateAsync(string key, CancellationToken ct, Func<Task> action)
+    {
+        var panel = panelUpdates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        await panel.WaitAsync(ct);
+        try
+        {
+            await action();
         }
-        finally { update.Release(); }
+        finally { panel.Release(); }
     }
     private bool HasMeaningfulVaultedReward(RelicRow row, MarketSnapshot snapshot) => row.Relic.Rewards
         .Where(reward => !unvaultedRewardNames.Contains(reward.RewardName.Trim().ToLowerInvariant()))
@@ -594,5 +604,6 @@ internal sealed class RelicPanelManager : IAsyncDisposable
     {
         bot.ButtonExecuted -= DispatchButtonAsync; bot.SelectMenuExecuted -= DispatchSelectAsync;
         await StopAsync(); cancellation?.Dispose(); update.Dispose(); setup.Dispose();
+        foreach (var panel in panelUpdates.Values) panel.Dispose();
     }
 }
