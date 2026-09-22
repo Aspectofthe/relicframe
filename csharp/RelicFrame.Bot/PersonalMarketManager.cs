@@ -46,6 +46,9 @@ internal sealed record PersonalMarketSettings
 internal sealed class PersonalMarketManager : IAsyncDisposable
 {
     private const int PageSize = 12;
+    private sealed record BoardSnapshot(PersonalMarketQuote[] Quotes, IReadOnlySet<string> ManagedItemIds,
+        string EmptyDescription, string DescriptionTail,
+        DateTimeOffset? LastAccountSync, bool AutoPublishEnabled, bool SellCompleteSets, bool ProtectIncompleteSets);
     private readonly DiscordSocketClient bot;
     private readonly LiveMarket market;
     private readonly MarketHttp http;
@@ -61,7 +64,9 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
     private readonly PrimeSetCompletion setCompletion;
     private IReadOnlyList<PrimeSetDefinition> setDefinitions = [];
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly SemaphoreSlim renderGate = new(1, 1);
     private PersonalMarketState state;
+    private BoardSnapshot? boardSnapshot;
     private CancellationTokenSource? cancellation;
     private Task? worker;
     private bool reconciliationPending;
@@ -326,18 +331,9 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             if (actions.Length > 0) state.LastActions = actions;
         }
         else if (sourceActions.Count > 0) state.LastActions = sourceActions.Take(8).ToArray();
-        var pages = Math.Max(1, (quotes.Length + PageSize - 1) / PageSize); state.Page = Math.Clamp(state.Page, 1, pages);
-        var rows = quotes.Skip((state.Page - 1) * PageSize).Take(PageSize)
-            .Select((row, index) =>
-            {
-                var itemId = market.ItemIdForName(row.ItemName);
-                var managed = itemId is not null && state.ManagedOrderIds.ContainsKey(itemId);
-                return $"**{(state.Page - 1) * PageSize + index + 1}. {row.ItemName}** ×{row.Quantity} · lowest {row.LowestAsk}p · {(managed ? "listed" : "target")} **{row.DraftPrice}p**{(row.LowestSeller.Length > 0 ? $" · `{row.LowestSeller}`" : "")}";
-            });
         var sourceAge = File.GetLastWriteTimeUtc(inventoryPath);
-        var description = quotes.Length == 0
-            ? $"No mapped Prime inventory items currently have a non-outlier online ask of at least **{minimumPrice}p**. If this file is still empty, import your inventory JSON at `{inventoryPath}`."
-            : string.Join('\n', rows);
+        var emptyDescription = $"No mapped Prime inventory items currently have a non-outlier online ask of at least **{minimumPrice}p**. If this file is still empty, import your inventory JSON at `{inventoryPath}`.";
+        var description = "";
         var mode = state.AutoPublishEnabled == true ? "AUTO LISTING ENABLED" : "AUTO LISTING PAUSED";
         description += $"\n\n**{mode}.** Minimum {minimumPrice}p · undercut {undercut}p · stabilized online/recent-visible price · owner listing excluded: {(ownSellerSlug.Length > 0 ? "yes" : "no; set RELICFRAME_WFM_USER_SLUG")} · inventory file <t:{new DateTimeOffset(sourceAge).ToUnixTimeSeconds()}:R>.";
         description += $"\n**Complete sets:** {(state.SellCompleteSets ? "sell sets and only surplus parts" : "sell parts separately")} · **sets one component type away:** {(state.ProtectIncompleteSets ? "reserve one completion's owned parts; sell only extras" : "sell their parts")}.";
@@ -365,21 +361,55 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         var pendingSold = state.PendingSoldQuantities.Values.Sum(value => Math.Max(0, value));
         var alecaTradeMode = File.Exists(alecaPublicTokenPath) ? "completed-trade feed connected" : $"not connected; add a trades-only public token at `{alecaPublicTokenPath}`";
         description += $"\nAlecaFrame {alecaTradeMode}. Completed sales and managed Warframe.market quantity reductions remove stale stock immediately. Pending stale-cache deduction: **{pendingSold}** item(s).";
-        var embed = new EmbedBuilder().WithTitle("Personal Prime Market · automatic listings").WithDescription(description.Length <= 4096 ? description : description[..4093] + "…")
-            .WithColor(new Color(state.AutoPublishEnabled == true ? 0x2ECC71u : 0xF39C12u)).WithFooter($"Page {state.Page}/{pages} · {quotes.Length} eligible items · authenticated sync {(state.LastAccountSync.HasValue ? state.LastAccountSync.Value.ToString("u") : "never")}").Build();
+        var snapshot = new BoardSnapshot(quotes, state.ManagedOrderIds.Keys.ToHashSet(StringComparer.Ordinal),
+            emptyDescription, description, state.LastAccountSync,
+            state.AutoPublishEnabled == true, state.SellCompleteSets, state.ProtectIncompleteSets);
+        Volatile.Write(ref boardSnapshot, snapshot);
+        await RenderBoardAsync(channel, snapshot, force, ct);
+        status = $"ready; {quotes.Length} eligible; auto listing {(state.AutoPublishEnabled == true ? "enabled" : "paused")}";
+    }
+
+    private (Embed Embed, MessageComponent Components, string Hash) BuildBoard(BoardSnapshot snapshot, int page)
+    {
+        var pages = Math.Max(1, (snapshot.Quotes.Length + PageSize - 1) / PageSize);
+        var rows = snapshot.Quotes.Skip((page - 1) * PageSize).Take(PageSize)
+            .Select((row, index) =>
+            {
+                var itemId = market.ItemIdForName(row.ItemName);
+                var managed = itemId is not null && snapshot.ManagedItemIds.Contains(itemId);
+                return $"**{(page - 1) * PageSize + index + 1}. {row.ItemName}** ×{row.Quantity} · lowest {row.LowestAsk}p · {(managed ? "listed" : "target")} **{row.DraftPrice}p**{(row.LowestSeller.Length > 0 ? $" · `{row.LowestSeller}`" : "")}";
+            });
+        var description = (snapshot.Quotes.Length == 0 ? snapshot.EmptyDescription : string.Join('\n', rows)) + snapshot.DescriptionTail;
+        var embed = new EmbedBuilder().WithTitle("Personal Prime Market · automatic listings")
+            .WithDescription(description.Length <= 4096 ? description : description[..4093] + "…")
+            .WithColor(new Color(snapshot.AutoPublishEnabled ? 0x2ECC71u : 0xF39C12u))
+            .WithFooter($"Page {page}/{pages} · {snapshot.Quotes.Length} eligible items · authenticated sync {(snapshot.LastAccountSync.HasValue ? snapshot.LastAccountSync.Value.ToString("u") : "never")}").Build();
         var components = new ComponentBuilder()
-            .WithButton("Previous", "personal-market:prev", ButtonStyle.Secondary, disabled: state.Page <= 1)
+            .WithButton("Previous", "personal-market:prev", ButtonStyle.Secondary, disabled: page <= 1)
             .WithButton("Sync listings now", "personal-market:refresh", ButtonStyle.Primary)
-            .WithButton("Next", "personal-market:next", ButtonStyle.Secondary, disabled: state.Page >= pages)
-            .WithButton(state.AutoPublishEnabled == true ? "Pause auto listing" : "Enable auto listing", "personal-market:auto-toggle", state.AutoPublishEnabled == true ? ButtonStyle.Danger : ButtonStyle.Success, row: 1)
-            .WithButton(state.SellCompleteSets ? "Sell sets: ON" : "Sell sets: OFF", "personal-market:sets-toggle", ButtonStyle.Secondary, row: 1)
-            .WithButton(state.ProtectIncompleteSets ? "Protect completions: ON" : "Protect completions: OFF", "personal-market:completion-toggle", ButtonStyle.Secondary, row: 1).Build();
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(embed.Description + "\0" + embed.Footer?.Text + "\0" + state.Page)));
-        if (!force && state.MessageId != 0 && state.RenderHash == hash) { Save(); status = $"ready; {quotes.Length} eligible; auto listing {(state.AutoPublishEnabled == true ? "enabled" : "paused")}"; return; }
-        var old = state.MessageId == 0 ? null : await channel.GetMessageAsync(state.MessageId) as IUserMessage;
-        if (old is null) { var sent = await channel.SendMessageAsync(embed: embed, components: components, allowedMentions: AllowedMentions.None); state.MessageId = sent.Id; }
-        else await old.ModifyAsync(properties => { properties.Embed = embed; properties.Components = components; properties.AllowedMentions = AllowedMentions.None; });
-        state.RenderHash = hash; Save(); status = $"ready; {quotes.Length} eligible; auto listing {(state.AutoPublishEnabled == true ? "enabled" : "paused")}";
+            .WithButton("Next", "personal-market:next", ButtonStyle.Secondary, disabled: page >= pages)
+            .WithButton(snapshot.AutoPublishEnabled ? "Pause auto listing" : "Enable auto listing", "personal-market:auto-toggle", snapshot.AutoPublishEnabled ? ButtonStyle.Danger : ButtonStyle.Success, row: 1)
+            .WithButton(snapshot.SellCompleteSets ? "Sell sets: ON" : "Sell sets: OFF", "personal-market:sets-toggle", ButtonStyle.Secondary, row: 1)
+            .WithButton(snapshot.ProtectIncompleteSets ? "Protect completions: ON" : "Protect completions: OFF", "personal-market:completion-toggle", ButtonStyle.Secondary, row: 1).Build();
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(embed.Description + "\0" + embed.Footer?.Text + "\0" + page)));
+        return (embed, components, hash);
+    }
+
+    private async Task RenderBoardAsync(ITextChannel channel, BoardSnapshot snapshot, bool force, CancellationToken ct)
+    {
+        await renderGate.WaitAsync(ct);
+        try
+        {
+            var pages = Math.Max(1, (snapshot.Quotes.Length + PageSize - 1) / PageSize);
+            state.Page = Math.Clamp(state.Page, 1, pages);
+            var board = BuildBoard(snapshot, state.Page);
+            if (!force && state.MessageId != 0 && state.RenderHash == board.Hash) { Save(); return; }
+            var old = state.MessageId == 0 ? null : await channel.GetMessageAsync(state.MessageId) as IUserMessage;
+            if (old is null) { var sent = await channel.SendMessageAsync(embed: board.Embed, components: board.Components, allowedMentions: AllowedMentions.None); state.MessageId = sent.Id; }
+            else await old.ModifyAsync(properties => { properties.Embed = board.Embed; properties.Components = board.Components; properties.AllowedMentions = AllowedMentions.None; });
+            state.RenderHash = board.Hash; Save();
+        }
+        finally { renderGate.Release(); }
     }
 
     private async Task<string[]> ReconcileAccountAsync(IReadOnlyList<PrimeInventoryEntry> inventory, IReadOnlyList<PersonalMarketQuote> quotes,
@@ -668,6 +698,31 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         if (interaction.GuildId != targetGuild || !interaction.Data.CustomId.StartsWith("personal-market:", StringComparison.Ordinal)) return;
         var ownerId = configuredOwner == 0 ? interaction.GuildId is { } id ? bot.GetGuild(id)?.OwnerId ?? 0 : 0 : configuredOwner;
         if (interaction.User.Id != ownerId) { await interaction.RespondAsync("This private board belongs to its configured owner.", ephemeral: true); return; }
+        if (interaction.Message.Id != state.MessageId)
+        {
+            await interaction.RespondAsync("This Personal Market message is outdated. Use the current board.", ephemeral: true);
+            return;
+        }
+        if (interaction.Data.CustomId.EndsWith(":prev", StringComparison.Ordinal) ||
+            interaction.Data.CustomId.EndsWith(":next", StringComparison.Ordinal))
+        {
+            var snapshot = Volatile.Read(ref boardSnapshot);
+            if (snapshot is not null)
+            {
+                try { await TurnPageAsync(interaction, snapshot); }
+                catch (Exception error)
+                {
+                    Console.WriteLine($"[personal-market-page] {error.GetType().Name}: {error.Message}");
+                    try
+                    {
+                        if (interaction.HasResponded) await interaction.FollowupAsync("Page change failed. Try again.", ephemeral: true);
+                        else await interaction.RespondAsync("Page change failed. Try again.", ephemeral: true);
+                    }
+                    catch { }
+                }
+                return;
+            }
+        }
         await interaction.DeferAsync(ephemeral: true);
         _ = Task.Run(async () =>
         {
@@ -675,13 +730,35 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             catch (Exception error)
             {
                 Console.WriteLine($"[personal-market-button] {error.GetType().Name}: {error.Message}");
-                try { await interaction.FollowupAsync($"Personal Market action failed: {error.Message}", ephemeral: true); }
+                try { await interaction.ModifyOriginalResponseAsync(response => response.Content = $"Personal Market action failed: {error.Message}"); }
                 catch (Exception responseError) { Console.WriteLine($"[personal-market-button] Response failed: {responseError.GetType().Name}"); }
             }
         }, CancellationToken.None);
     }
+
+    private async Task TurnPageAsync(SocketMessageComponent interaction, BoardSnapshot snapshot)
+    {
+        await renderGate.WaitAsync();
+        try
+        {
+            var pages = Math.Max(1, (snapshot.Quotes.Length + PageSize - 1) / PageSize);
+            var delta = interaction.Data.CustomId.EndsWith(":next", StringComparison.Ordinal) ? 1 : -1;
+            var nextPage = Math.Clamp(state.Page + delta, 1, pages);
+            var board = BuildBoard(snapshot, nextPage);
+            await interaction.UpdateAsync(response =>
+            {
+                response.Embed = board.Embed;
+                response.Components = board.Components;
+                response.AllowedMentions = AllowedMentions.None;
+            });
+            state.Page = nextPage;
+            state.RenderHash = board.Hash;
+        }
+        finally { renderGate.Release(); }
+    }
     private async Task ButtonAsync(SocketMessageComponent interaction)
     {
+        await interaction.ModifyOriginalResponseAsync(response => response.Content = "Applying Personal Market changes…");
         await gate.WaitAsync();
         try
         {
@@ -693,11 +770,11 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             Save();
             var channel = interaction.Channel as ITextChannel ?? throw new InvalidOperationException("Personal Market channel unavailable.");
             await UpdateLockedAsync(channel, force: true, CancellationToken.None);
-            await interaction.FollowupAsync(state.AutoPublishEnabled == true
+            await interaction.ModifyOriginalResponseAsync(response => response.Content = state.AutoPublishEnabled == true
                 ? "Personal Market synchronized with Warframe.market using the selected set/completion rules."
-                : "Automatic listing is paused; inventory view and set/completion rules refreshed without account writes.", ephemeral: true);
+                : "Automatic listing is paused; inventory view and set/completion rules refreshed without account writes.");
         }
-        catch (Exception e) { await interaction.FollowupAsync($"Refresh failed: {e.Message}", ephemeral: true); }
+        catch (Exception e) { await interaction.ModifyOriginalResponseAsync(response => response.Content = $"Refresh failed: {e.Message}"); }
         finally { gate.Release(); }
     }
 
