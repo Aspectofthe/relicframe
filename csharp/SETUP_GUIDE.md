@@ -62,6 +62,8 @@ The launcher builds the Release application and prompts once for:
 - the Discord bot token, with hidden input;
 - the Discord server ID.
 
+Before loading credentials or building, the launcher checks the official `origin/csharp-rewrite` branch on GitHub. If a newer commit exists, it fast-forwards the clean Git checkout and builds the new code. If no update exists, GitHub is unreachable, or this is a ZIP download, it simply starts the installed version. Local edits, untracked files, local commits, a different branch, or a different origin are never overwritten. This runs only when starting the launcher; it does not restart an already running bot. Review changes to that GitHub branch if you do not want new code to run automatically.
+
 It stores both in `csharp/runtime/launch-credentials.xml`, encrypted for the current Windows user with DPAPI. That directory is ignored by Git. To replace the saved credentials:
 
 ```powershell
@@ -74,7 +76,7 @@ After one successful build, `-NoBuild` can be used for a quicker launch:
 .\csharp\run-bot.cmd -NoBuild
 ```
 
-Use the normal launch again after downloading new code; `-NoBuild` deliberately skips compiling updates. If the ZIP was extracted to a different computer or Windows account, the old DPAPI credential file cannot be reused—let that computer's launcher prompt for its own token and server ID.
+If an update is installed, `-NoBuild` is ignored for that launch so new source is compiled. To skip the GitHub check, use `-NoUpdate` (Linux: `--no-update`) or set `RELICFRAME_AUTO_UPDATE=0`. ZIP downloads have no Git history and must be replaced manually. If the ZIP was extracted to a different computer or Windows account, the old DPAPI credential file cannot be reused—let that computer's launcher prompt for its own token and server ID.
 
 ## 5. Start on Linux
 
@@ -84,6 +86,8 @@ From the repository root:
 chmod +x csharp/run-bot.sh
 ./csharp/run-bot.sh
 ```
+
+The Linux launcher applies the same clean-checkout, fast-forward-only update check before loading its saved credentials. Container images do not contain a Git checkout; rebuild and redeploy the image to update a container.
 
 The launcher prompts for the same token and server ID. It stores them in owner-only mode-`600` files inside the ignored `csharp/runtime` directory. Use `--forget-credentials` to replace them or `--no-build` after a successful Release build.
 
@@ -204,7 +208,7 @@ This prints row/unit counts without item names. A zero count can mean the file i
 
 ## 8. Updating and troubleshooting
 
-Stop the running bot, update the repository, and run the normal launcher again so it rebuilds before connecting. Useful first checks are:
+Stop the running bot and run the normal launcher. It checks GitHub for a fast-forward update, builds when needed, then connects. For a dirty checkout or ZIP download, update manually. Useful first checks are:
 
 ```powershell
 dotnet build csharp/RelicFrame.Bot -c Release

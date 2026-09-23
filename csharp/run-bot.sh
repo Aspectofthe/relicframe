@@ -3,16 +3,32 @@ set -eu
 
 no_build=false
 forget=false
+no_update=false
 for argument in "$@"; do
   case "$argument" in
     --no-build) no_build=true ;;
     --forget-credentials) forget=true ;;
+    --no-update) no_update=true ;;
     *) echo "Unknown option: $argument" >&2; exit 2 ;;
   esac
 done
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository=$(dirname -- "$script_dir")
+if [ "${RELICFRAME_UPDATE_CHECKED:-}" != 1 ] && [ "$no_update" = false ] && [ "${RELICFRAME_AUTO_UPDATE:-1}" != 0 ]; then
+  if sh "$script_dir/update-before-launch.sh" "$repository"; then
+    :
+  else
+    update_exit=$?
+    if [ "$update_exit" -eq 10 ]; then
+      RELICFRAME_UPDATE_CHECKED=1 RELICFRAME_UPDATE_APPLIED=1 exec sh "$script_dir/run-bot.sh" "$@"
+    fi
+  fi
+fi
+if [ "${RELICFRAME_UPDATE_APPLIED:-}" = 1 ] && [ "$no_build" = true ]; then
+  echo '[update] Ignoring --no-build because new source code needs a Release build.'
+  no_build=false
+fi
 runtime_dir=${RELICFRAME_RUNTIME_DIR:-"$script_dir/runtime"}
 token_file="$runtime_dir/launch-token"
 guild_file="$runtime_dir/launch-guild-id"

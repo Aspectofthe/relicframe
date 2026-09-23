@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$NoBuild,
-    [switch]$ForgetCredentials
+    [switch]$ForgetCredentials,
+    [switch]$NoUpdate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,6 +17,13 @@ $env:PSModulePath = [string]::Join(';', @(
 ))
 Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
 $repository = Split-Path -Parent $PSScriptRoot
+if (-not $NoUpdate -and $env:RELICFRAME_AUTO_UPDATE -ne '0') {
+    $updated = & (Join-Path $PSScriptRoot 'update-before-launch.ps1') -Repository $repository
+    if ($updated -and $NoBuild) {
+        Write-Host '[update] Ignoring -NoBuild because new source code needs a Release build.'
+        $NoBuild = $false
+    }
+}
 $localDotnet = Join-Path $repository '.tools\dotnet\dotnet.exe'
 $dotnet = if (Test-Path -LiteralPath $localDotnet) { $localDotnet } else { 'dotnet' }
 $runtimeDirectory = Join-Path $repository 'csharp\runtime'

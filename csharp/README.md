@@ -116,13 +116,13 @@ Do not point the runtime directory at Python's working directory or private expo
 dotnet csharp/RelicFrame.Bot/bin/Release/net10.0/RelicFrame.Bot.dll --test-bot
 ```
 
-On Windows, the checked-in launcher selects `.tools\dotnet\dotnet.exe` when present, builds Release, validates the required environment variables, and starts the bot:
+On Windows, the checked-in launcher first checks the official GitHub `csharp-rewrite` branch for a fast-forward update, then selects `.tools\dotnet\dotnet.exe` when present, builds Release, validates the required environment variables, and starts the bot:
 
 ```powershell
 .\csharp\run-bot.cmd
 ```
 
-The `.cmd` wrapper starts the checked-in PowerShell launcher with a process-only execution-policy bypass, so it also works when direct `.ps1` execution is disabled. Use `.\csharp\run-bot.cmd -NoBuild` only after a successful Release build. You can alternatively run the script directly after allowing only the current PowerShell process:
+The `.cmd` wrapper starts the checked-in PowerShell launcher with a process-only execution-policy bypass, so it also works when direct `.ps1` execution is disabled. The update check only runs for a clean Git checkout tracking `origin/csharp-rewrite` at the official repository; it never resets local changes or commits. An unavailable GitHub or a ZIP download does not prevent startup. `-NoBuild` skips the build unless new code was installed, in which case the launcher builds it. Use `-NoUpdate` or `RELICFRAME_AUTO_UPDATE=0` to opt out. You can alternatively run the script directly after allowing only the current PowerShell process:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -142,7 +142,7 @@ chmod +x csharp/run-bot.sh
 ./csharp/run-bot.sh
 ```
 
-It prompts once and stores the token and guild ID in separate mode-`600` files under the ignored `csharp/runtime` directory. Environment variables still take precedence. Use `./csharp/run-bot.sh --no-build` after a successful Release build or `--forget-credentials` to replace them. For live Trade Chat OCR under X11, install `xdotool` and ImageMagick (`magick` or `import`). Under Wayland, install `grim` and set both `RELICFRAME_TRADE_OCR_LINUX_GEOMETRY` and `RELICFRAME_TRADE_OCR_ASSUME_WARFRAME=true`. A headless server can use `RELICFRAME_TRADE_OCR_CAPTURE_FILE`, but it cannot see a different computer's Warframe window unless that image and any `EE.log`/inventory files are securely mounted or synchronized.
+It performs the same clean-checkout GitHub update check, then prompts once and stores the token and guild ID in separate mode-`600` files under the ignored `csharp/runtime` directory. Environment variables still take precedence. Use `./csharp/run-bot.sh --no-build` after a successful Release build; an installed update forces a rebuild. Use `--no-update` to skip GitHub or `--forget-credentials` to replace credentials. For live Trade Chat OCR under X11, install `xdotool` and ImageMagick (`magick` or `import`). Under Wayland, install `grim` and set both `RELICFRAME_TRADE_OCR_LINUX_GEOMETRY` and `RELICFRAME_TRADE_OCR_ASSUME_WARFRAME=true`. A headless server can use `RELICFRAME_TRADE_OCR_CAPTURE_FILE`, but it cannot see a different computer's Warframe window unless that image and any `EE.log`/inventory files are securely mounted or synchronized.
 
 Available test commands:
 
