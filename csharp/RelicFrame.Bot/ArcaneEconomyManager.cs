@@ -50,7 +50,7 @@ internal sealed class ArcaneEconomyManager : IAsyncDisposable
             var current = Volatile.Read(ref progressCurrent); var total = Volatile.Read(ref progressTotal);
             if (current <= 0 || total <= current || progressStartedAt == default) return null;
             var remaining = progressDeadline - DateTimeOffset.UtcNow;
-            return remaining > TimeSpan.Zero ? remaining : TimeSpan.FromSeconds(1);
+            return remaining > TimeSpan.Zero ? remaining : null;
         }
     }
 

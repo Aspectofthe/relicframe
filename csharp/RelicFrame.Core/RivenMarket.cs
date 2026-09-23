@@ -109,7 +109,7 @@ public sealed class RivenMarket : IAsyncDisposable
             {
                 if (progressTotal <= 0 || progressCurrent >= progressTotal) return null;
                 var remaining = progressDeadline - DateTimeOffset.UtcNow;
-                return remaining > TimeSpan.Zero ? remaining : TimeSpan.FromSeconds(1);
+                return remaining > TimeSpan.Zero ? remaining : null;
             }
         }
     }

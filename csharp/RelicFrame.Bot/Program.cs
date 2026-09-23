@@ -108,11 +108,22 @@ static string FormatEta(TimeSpan value)
     return $"{seconds / 3600}h {(seconds % 3600) / 60}m";
 }
 
+var initialLoadReady = 0;
 string OverallLoadingStatus()
 {
     var marketRemaining = market.BootstrapRemaining;
     var rivenRemaining = rivens.EstimatedRemaining;
     var arcaneRemaining = arcaneEconomy.EstimatedRemaining;
+    if (Volatile.Read(ref initialLoadReady) != 0)
+    {
+        if (market.IsBootstrapping) return "ready; refreshing market books";
+        if (rivenRemaining.HasValue || (!rivens.Status.StartsWith("Complete", StringComparison.OrdinalIgnoreCase)
+            && !rivens.Status.StartsWith("Stopped", StringComparison.OrdinalIgnoreCase)
+            && !rivens.Status.StartsWith("Scan failed", StringComparison.OrdinalIgnoreCase)))
+            return $"ready; refreshing Rivens ({rivens.ProgressStage})";
+        if (arcaneRemaining.HasValue) return "ready; refreshing Arcane books";
+        return "ready";
+    }
     if (marketRemaining is { } marketEta)
     {
         // Market work has priority on the shared five-request-per-second budget, so
@@ -128,9 +139,11 @@ string OverallLoadingStatus()
     var rivenBusy = !rivens.Status.StartsWith("Complete", StringComparison.OrdinalIgnoreCase)
         && !rivens.Status.StartsWith("Stopped", StringComparison.OrdinalIgnoreCase)
         && !rivens.Status.StartsWith("Scan failed", StringComparison.OrdinalIgnoreCase);
-    return rivenBusy ? $"loading; ETA calculating (Riven {rivens.ProgressStage})"
+    var result = rivenBusy ? $"loading; ETA calculating (Riven {rivens.ProgressStage})"
         : maxedMods.Status.StartsWith("pricing", StringComparison.Ordinal) ? $"loading; {maxedMods.Status}"
         : syndicates.Status.StartsWith("pricing", StringComparison.Ordinal) ? $"loading; Syndicate {syndicates.Status}" : "ready";
+    if (result == "ready") Interlocked.Exchange(ref initialLoadReady, 1);
+    return result;
 }
 
 socket.Log += message =>

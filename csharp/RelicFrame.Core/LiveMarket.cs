@@ -259,7 +259,16 @@ public sealed class LiveMarket : IAsyncDisposable
             var book = books.GetOrAdd(slug, _ => new OrderBook()); book.Replace(rows);
             refreshedThisRun[slug] = 0;
             var cache = Path.Combine(bookCachePath, slug + ".rfob");
-            if (!File.Exists(cache) || DateTime.UtcNow - File.GetLastWriteTimeUtc(cache) >= TimeSpan.FromMinutes(15)) book.SaveCache(cache);
+            try
+            {
+                if (!File.Exists(cache) || DateTime.UtcNow - File.GetLastWriteTimeUtc(cache) >= TimeSpan.FromMinutes(15)) book.SaveCache(cache);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // The live response is already in memory. A transient Windows file lock
+                // must not turn a successful market refresh into a failed book.
+                Console.WriteLine($"[market-cache] {slug}: {error.GetType().Name}; live book retained, disk cache will retry");
+            }
             return true;
         }
         catch (Exception e) when (!ct.IsCancellationRequested && e is not OutOfMemoryException)
