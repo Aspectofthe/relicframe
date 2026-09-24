@@ -708,7 +708,17 @@ var retryHandler = new RetryHandler();
         ("Quanta Crita-satiata\n+111.2% Multishot\n+197.4% Damage\n+189% Critical Chance\n-64.9% Zoom\nRank 8/8 MR 15 rerolls 8", .91f),
         ("Quanta Crita satiata\n111.2 Multishot\n197.4 Damage\n189 Critical Chance\n-64.9 Zoom\nRank 8/8 MR 15 8", .82f)
     ], ["Quanta", "Quanta Vandal", "Torid"]);
-    Assert(rivenOcr.WeaponName == "Quanta" && rivenOcr.Positives.Length == 3 && rivenOcr.Negative?.Name == "zoom", "local multi-pass Riven OCR resolves weapon and 3+1 stats");
+Assert(rivenOcr.WeaponName == "Quanta" && rivenOcr.Positives.Length == 3 && rivenOcr.Negative?.Name == "zoom", "local multi-pass Riven OCR resolves weapon and 3+1 stats");
+var wrappedSlideOcr = RivenOcrText.Parse([
+    ("Dual Ichor Visi-acricron\n+197.8% Melee Damage\n+103% Critical Damage\n+199.8% Critical Chance\n(x2 for Heavy Attacks)\n-102.8% Critical Chance\nfor Slide Attack\nMR 14 rerolls 65", .9f),
+    ("Dual Ichor Visi-acricron\n+197.8% Melee Damage\n+103% Critical Damage\n+199.8% Critical Chance\n-102.8% Critical Chance for Slide Attack\nMR 14 rerolls 65", .85f)
+], ["Dual Ichor"]);
+Assert(wrappedSlideOcr.Positives.Select(stat => stat.Name).ToHashSet().SetEquals([
+        "base_damage_/_melee_damage", "critical_damage", "critical_chance"])
+    && wrappedSlideOcr.Negative is { Name: "critical_chance_on_slide_attack", Value: < -102.79 and > -102.81 },
+    "wrapped slide-attack Critical Chance stays distinct from positive Critical Chance");
+Assert(!wrappedSlideOcr.Notes.Any(note => note.Contains("Faction multiplier", StringComparison.Ordinal)),
+    "heavy-attack x2 annotation is not reported as a parsed faction multiplier");
     Assert(rivenOcr.ModRank == 8 && rivenOcr.MasteryRank == 15 && rivenOcr.Rerolls == 8, "local Riven OCR reads rank, mastery and rerolls");
     Assert(rivenOcr.Positives.Any(stat => stat.Name == "multishot" && Math.Abs(stat.Value!.Value - 111.2) < .001), "local Riven OCR preserves decimal stat values");
     var latronOcr = RivenOcrText.Parse([

@@ -52,8 +52,19 @@ public static partial class RivenOcrText
         var lines = rows.SelectMany((pass, passIndex) =>
         {
             var passLines = pass.Text.Replace('\r', '\n').Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-            return passLines.Select((line, lineIndex) => (Text: Clean(line), pass.Confidence, Pass: passIndex,
-                Position: passLines.Length <= 1 ? 0d : lineIndex / (double)(passLines.Length - 1)));
+            return passLines.Select((line, lineIndex) =>
+            {
+                // The melee slide-critical label commonly wraps after "Critical Chance".
+                // Join its continuation before matching stat names, otherwise it is
+                // mistaken for the separate +Critical Chance attribute on the same card.
+                var text = Clean(line);
+                if (lineIndex + 1 < passLines.Length && ValueToken().IsMatch(text)
+                    && Regex.IsMatch(text, @"\bcritical\s+chance\b", RegexOptions.IgnoreCase)
+                    && Regex.IsMatch(passLines[lineIndex + 1], @"^\s*(?:for|on)\s+slide\s+attack\b", RegexOptions.IgnoreCase))
+                    text += " " + Clean(passLines[lineIndex + 1]);
+                return (Text: text, pass.Confidence, Pass: passIndex,
+                    Position: passLines.Length <= 1 ? 0d : lineIndex / (double)(passLines.Length - 1));
+            });
         }).Where(line => line.Text.Length > 0).ToArray();
         var weapons = weaponNames.Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var weapon = weapons.Select(name => (Name: name, Score: lines.Max(line => WeaponScore(line.Text, name))))
@@ -71,7 +82,7 @@ public static partial class RivenOcrText
             var numberText = match.Groups["number"].Value.Replace('O', '0').Replace('o', '0').Replace(',', '.');
             if (!double.TryParse(numberText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)) continue;
             var multiplier = match.Groups["multiplier"].Success;
-            if (multiplier) { value = (value - 1) * 100; normalizedMultipliers = true; }
+            if (multiplier) value = (value - 1) * 100;
             // Damage/status icons are pictures rather than characters. Depending on scale,
             // Tesseract may emit punctuation, a random letter, or nothing for them. Match
             // the known label anywhere after the value instead of requiring a clean gap.
@@ -84,6 +95,7 @@ public static partial class RivenOcrText
                 .Distinct(StringComparer.Ordinal).Select(slug => (Slug: slug, Name: RivenPricing.DisplayName(slug), Score: Math.Max(StatLabelScore(rawName, slug), StatLabelScore(fullTail, slug))))
                 .OrderByDescending(stat => stat.Score).First();
             if (best.Score < .62 || !PlausibleValue(best.Slug, value)) continue;
+            if (multiplier) normalizedMultipliers = true;
             var sign = match.Groups["sign"].Value;
             candidates.Add(new(best.Slug, value, sign is "-" or "−" or "–" or "—" || multiplier && value < 0,
                 best.Score * .75 + line.Confidence * .25, line.Pass, line.Position));
@@ -367,6 +379,7 @@ public static partial class RivenOcrText
         "recoil" => ["recoil", "weapon recoil"],
         "chance_to_gain_extra_combo_count" => ["additional combo count chance", "chance to gain extra combo count"],
         "chance_to_gain_combo_count" => ["chance to gain combo count"],
+        "critical_chance_on_slide_attack" => ["critical chance for slide attack", "critical chance on slide attack", "slide attack critical chance"],
         _ => [RivenPricing.DisplayName(slug)]
     };
     private static double? Basis(string slug, int column) =>
