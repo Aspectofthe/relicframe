@@ -201,14 +201,14 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
             if (string.IsNullOrWhiteSpace(setName) || cachedRows?.Take(10).All(row => row.SetName != setName) != false ||
                 completionRelics.GetValueOrDefault(setName) is not { } relic)
             {
-                await interaction.ModifyOriginalResponseAsync(response => response.Content = "That set is no longer in the current top ten. Refresh the board and choose again.");
+                await interaction.FollowupAsync("That set is no longer in the current top ten. Refresh the board and choose again.", ephemeral: true);
                 return;
             }
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             var itemName = relic.Name + " Relic";
             if (!await market.EnsureBookAsync(itemName, timeout.Token) || !market.IsBookFresh(itemName, TimeSpan.FromMinutes(5)))
             {
-                await interaction.ModifyOriginalResponseAsync(response => response.Content = "A fresh relic listing is unavailable. Try again shortly.");
+                await interaction.FollowupAsync("A fresh relic listing is unavailable. Try again shortly.", ephemeral: true);
                 return;
             }
             var match = market.Match(relic.Name, relic.Refinement.ToString(), true, relic: true,
@@ -219,26 +219,26 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
                 .MinBy(row => row.Price) : null;
             if (order is null)
             {
-                await interaction.ModifyOriginalResponseAsync(response => response.Content = "The quoted seller is no longer available for that refinement. Refresh the board for the next cheapest relic.");
+                await interaction.FollowupAsync("The quoted seller is no longer available for that refinement. Refresh the board for the next cheapest relic.", ephemeral: true);
                 return;
             }
             var seller = order.Seller.Replace('\r', ' ').Replace('\n', ' ').Replace('`', '\'');
             var price = order.Price.ToString("0.##", CultureInfo.InvariantCulture);
             var whisper = $"/w {seller} Hi! I want to buy: {itemName} ({relic.Refinement}) for {price} platinum. (warframe.market)";
             var embed = new EmbedBuilder().WithTitle($"💬 Buy {itemName}")
-                .WithDescription($"For **{setName}** · {relic.Refinement}\n```text\n{whisper}\n```")
+                .WithDescription($"```text\n{whisper}\n```")
                 .WithColor(new Color(0x2ECC71)).AddField("Seller", $"`{seller}`", true)
-                .AddField("Current ask", $"{price}p each", true)
+                .AddField("Price", $"{price}p each", true)
                 .AddField("Available", order.Quantity.HasValue ? $"×{order.Quantity:0.##}" : "Not reported", true);
             if (!string.IsNullOrWhiteSpace(order.SellerSlug))
                 embed.AddField("Warframe Market", $"[Open seller profile](https://warframe.market/profile/{Uri.EscapeDataString(order.SellerSlug)})");
             embed.WithFooter("Copy the /w command into Warframe yourself. RelicFrame never contacts the seller.");
-            await interaction.ModifyOriginalResponseAsync(response => { response.Content = ""; response.Embed = embed.Build(); });
+            await interaction.FollowupAsync(embed: embed.Build(), ephemeral: true, allowedMentions: AllowedMentions.None);
         }
         catch (Exception error)
         {
             Console.WriteLine($"[prime-set-completion-relic-whisper] {error.GetType().Name}: {error.Message}");
-            try { await interaction.ModifyOriginalResponseAsync(response => response.Content = "Could not load that relic seller. Try again shortly."); }
+            try { await interaction.FollowupAsync("Could not load that relic seller. Try again shortly.", ephemeral: true); }
             catch { }
         }
     }
