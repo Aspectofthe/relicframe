@@ -305,13 +305,21 @@ var completionSources = new[]
     new Relic("Axi Other", [new Reward("Different Prime Blueprint", "common")], true)
 };
 var cheapestCompletionRelic = PrimeSetCompletion.CheapestSourceRelic(completionSources, "Example Prime Blueprint", (name, tier) =>
-    name == "Lith Test" && tier == Refinement.Intact ? new OrderMatch([new OrderEntry(2, 1)], true)
-    : name == "Vanguard Test" && tier == Refinement.Radiant ? new OrderMatch([new OrderEntry(2, 1)], true)
-    : new OrderMatch([new OrderEntry(1, 1)], false));
+    name == "Lith Test" && tier == Refinement.Intact ? new OrderMatch([new OrderEntry(2, 1, SellerStatus: "online")], true)
+    : name == "Vanguard Test" && tier == Refinement.Radiant ? new OrderMatch([new OrderEntry(2, 1, SellerStatus: "ingame")], true)
+    : new OrderMatch([new OrderEntry(1, 1, SellerStatus: "online")], false));
 Assert(cheapestCompletionRelic is { Name: "Vanguard Test", Refinement: Refinement.Radiant, Price: 2, DropChance: 20 },
     "completion source selection includes unvaulted relics, rejects refinement fallback and breaks equal-price ties by drop chance");
 Assert(PrimeSetCompletion.CheapestSourceRelic(completionSources, "Absent Prime Part", (_, _) => new OrderMatch([new OrderEntry(1, 1)], true)) is null,
     "completion relic must actually contain the missing component");
+Assert(PrimeSetCompletion.CheapestSourceRelic(completionSources, "Example Prime Blueprint", (_, _) => new OrderMatch([
+    new OrderEntry(1, 1, SellerStatus: "offline"), new OrderEntry(2, 1),
+    new OrderEntry(3, 0, SellerStatus: "online"), new OrderEntry(4, 1, SellerStatus: "online"),
+    new OrderEntry(5, 1, SellerStatus: "ingame")], true)) is { Price: 4 },
+    "completion relic ignores cheaper offline, unknown-status and empty-stock listings");
+Assert(PrimeSetCompletion.CheapestSourceRelic(completionSources, "Example Prime Blueprint", (_, _) =>
+    new OrderMatch([new OrderEntry(1, 1, SellerStatus: "offline")], true)) is null,
+    "completion relic never falls back to offline sellers when no online seller exists");
 var squadRelic = new Relic("Lith Squad", [new("C1", "common"), new("C2", "common"), new("C3", "common"),
     new("U1", "uncommon"), new("U2", "uncommon"), new("R1", "rare")]);
 var squadPrices = new Dictionary<string, double?> { ["C1"] = 1, ["C2"] = 1, ["C3"] = 1,

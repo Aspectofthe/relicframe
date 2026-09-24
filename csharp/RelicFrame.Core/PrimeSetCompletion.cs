@@ -25,7 +25,11 @@ public sealed class PrimeSetCompletion
                 var match = asks(relic.RelicName, tier);
                 // Never use the order matcher’s all-refinement fallback as an exact quote.
                 if (!match.SubtypeMatched) continue;
-                var best = match.Entries.Where(row => double.IsFinite(row.Price) && row.Price > 0 && row.Quantity != 0).MinBy(row => row.Price);
+                var best = match.Entries.Where(row =>
+                    (row.SellerStatus.Equals("online", StringComparison.OrdinalIgnoreCase)
+                        || row.SellerStatus.Equals("ingame", StringComparison.OrdinalIgnoreCase))
+                    && double.IsFinite(row.Price) && row.Price > 0 && (row.Quantity is null || row.Quantity > 0))
+                    .MinBy(row => row.Price);
                 if (best is not null) choices.Add(new(relic.RelicName, tier, best.Price, Relic.Chance(tier, reward.Rarity)));
             }
         }

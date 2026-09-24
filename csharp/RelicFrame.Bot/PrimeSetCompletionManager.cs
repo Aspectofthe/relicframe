@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Globalization;
 using Discord;
 using Discord.WebSocket;
 using RelicFrame.Core;
@@ -43,6 +44,7 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
         try { state = File.Exists(statePath) ? Json.Read<PrimeSetCompletionState>(statePath) : new(); }
         catch (Exception error) when (error is IOException or System.Text.Json.JsonException) { state = new(); }
         bot.ButtonExecuted += DispatchButtonAsync;
+        bot.SelectMenuExecuted += DispatchSelectAsync;
     }
 
     public async Task<string> SetupAsync(SocketGuild guild, CancellationToken ct, CancellationToken lifetime)
@@ -89,7 +91,7 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
                 try { await UpdateAsync(false, ct); }
                 catch (Exception error) when (!ct.IsCancellationRequested && error is not OutOfMemoryException)
                 { status = $"refresh failed ({error.GetType().Name}); previous board retained"; Console.WriteLine($"[prime-set-completion] {error}"); }
-                await Task.Delay(market.PrimeSetNames.Count == 0 ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(15), ct);
+                await Task.Delay(market.PrimeSetNames.Count == 0 ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5), ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
@@ -113,12 +115,13 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
             var rows = await completion.AnalyzeAsync(inventory, personalMarket.ExcludedSellerSlug, progress, ct);
             var top = rows.Take(10).ToArray();
             var sources = top.SelectMany(row => market.SourceRelics(row.MissingItem)).DistinctBy(relic => relic.RelicName).ToArray();
-            await market.RefreshBooksAsync(sources.Select(relic => relic.RelicName + " Relic"),
-                force ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5), ct);
+            var maximumAge = force ? TimeSpan.Zero : TimeSpan.FromMinutes(5);
+            var oldestQuote = DateTimeOffset.UtcNow - maximumAge;
+            await market.RefreshBooksAsync(sources.Select(relic => relic.RelicName + " Relic"), maximumAge, ct);
             var relics = new Dictionary<string, PrimeCompletionRelic?>(StringComparer.OrdinalIgnoreCase);
             foreach (var row in top)
                 relics[row.SetName] = PrimeSetCompletion.CheapestSourceRelic(market.SourceRelics(row.MissingItem), row.MissingItem,
-                    (name, tier) => market.IsBookFresh(name + " Relic", TimeSpan.FromMinutes(10))
+                    (name, tier) => market.IsBookFresh(name + " Relic", DateTimeOffset.UtcNow - oldestQuote)
                         ? market.Match(name, tier.ToString(), true, relic: true, excludedSellerSlug: personalMarket.ExcludedSellerSlug)
                         : new OrderMatch([], false));
             var comparisons = await completion.ComparePartsAndSetsAsync(inventory, personalMarket.ExcludedSellerSlug, ct);
@@ -146,7 +149,7 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
             ? "No mapped Prime set in the current AlecaFrame inventory is exactly one component type away with usable in-game buy supply and a set price."
             : string.Join('\n', rows));
         description += "\n\nCompletion profit = estimated full-set sell value minus the current cost of the missing quantity. This board does not auto-buy, auto-craft or list completed sets.";
-        if (opportunities.Count > 0 && state.Page == 1) description += "\nCheapest relic = one online-seller relic, any refinement. Drops are not guaranteed; opening/traces are not included in completion profit.";
+        if (opportunities.Count > 0 && state.Page == 1) description += "\nCheapest relic = lowest online/in-game seller ask, any refinement, checked each refresh. Drops are not guaranteed; opening/traces are not included in completion profit.";
         if (state.Page == 1 && comparisons is { Count: > 0 })
         {
             var comparisonLines = comparisons.Take(5).Select(row =>
@@ -156,10 +159,17 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
                 + "\nThese are asking-price estimates, not confirmed sales. Unpriced or stale components are omitted.";
         }
         var embed = new EmbedBuilder().WithTitle("Prime-set completion profit").WithDescription(description.Length <= 4096 ? description : description[..4093] + "…")
-            .WithColor(new Color(0x9B59B6u)).WithFooter($"Page {state.Page}/{pages} · {opportunities.Count} one-component opportunities · refreshes every 15 minutes").Build();
-        var components = new ComponentBuilder().WithButton("Previous", "prime-set-completion:prev", ButtonStyle.Secondary, disabled: state.Page <= 1)
+            .WithColor(new Color(0x9B59B6u)).WithFooter($"Page {state.Page}/{pages} · {opportunities.Count} one-component opportunities · refreshes every 5 minutes").Build();
+        var controls = new ComponentBuilder().WithButton("Previous", "prime-set-completion:prev", ButtonStyle.Secondary, disabled: state.Page <= 1)
             .WithButton("Refresh inventory", "prime-set-completion:refresh", ButtonStyle.Primary)
-            .WithButton("Next", "prime-set-completion:next", ButtonStyle.Secondary, disabled: state.Page >= pages).Build();
+            .WithButton("Next", "prime-set-completion:next", ButtonStyle.Secondary, disabled: state.Page >= pages);
+        var relicOptions = opportunities.Skip((state.Page - 1) * PageSize).Take(PageSize)
+            .Where(row => completionRelics.GetValueOrDefault(row.SetName) is not null)
+            .Select(row => new SelectMenuOptionBuilder(row.SetName, row.SetName)).ToList();
+        if (relicOptions.Count > 0)
+            controls.WithSelectMenu("prime-set-completion:buy-relic", relicOptions,
+                "Choose a set for its cheapest relic /w", row: 1);
+        var components = controls.Build();
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(embed.Description + "\0" + embed.Footer?.Text + "\0" + state.Page)));
         if (!force && state.MessageId != 0 && state.RenderHash == hash) { Save(); return; }
         var old = state.MessageId == 0 ? null : await channel.GetMessageAsync(state.MessageId) as IUserMessage;
@@ -177,6 +187,61 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
         => completionRelics.GetValueOrDefault(setName) is { } relic
             ? $"\nCheapest relic: **{relic.Name} · {relic.Refinement} · {relic.Price:0.#}p** · drop {relic.DropChance:0.##}%"
             : "\nCheapest relic: no fresh online source listing.";
+
+    private async Task DispatchSelectAsync(SocketMessageComponent interaction)
+    {
+        if (interaction.GuildId != targetGuild || interaction.Data.CustomId != "prime-set-completion:buy-relic") return;
+        var ownerId = configuredOwner == 0 ? bot.GetGuild(targetGuild)?.OwnerId ?? 0 : configuredOwner;
+        if (interaction.User.Id != ownerId)
+        { await interaction.RespondAsync("This private board belongs to its configured owner.", ephemeral: true); return; }
+        await interaction.DeferAsync(ephemeral: true);
+        try
+        {
+            var setName = interaction.Data.Values.FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(setName) || cachedRows?.Take(10).All(row => row.SetName != setName) != false ||
+                completionRelics.GetValueOrDefault(setName) is not { } relic)
+            {
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = "That set is no longer in the current top ten. Refresh the board and choose again.");
+                return;
+            }
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var itemName = relic.Name + " Relic";
+            if (!await market.EnsureBookAsync(itemName, timeout.Token) || !market.IsBookFresh(itemName, TimeSpan.FromMinutes(5)))
+            {
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = "A fresh relic listing is unavailable. Try again shortly.");
+                return;
+            }
+            var match = market.Match(relic.Name, relic.Refinement.ToString(), true, relic: true,
+                excludedSellerSlug: personalMarket.ExcludedSellerSlug);
+            var order = match.SubtypeMatched ? match.Entries.Where(row =>
+                    row.SellerStatus is "online" or "ingame" && !string.IsNullOrWhiteSpace(row.Seller) &&
+                    double.IsFinite(row.Price) && row.Price > 0 && (row.Quantity is null || row.Quantity > 0))
+                .MinBy(row => row.Price) : null;
+            if (order is null)
+            {
+                await interaction.ModifyOriginalResponseAsync(response => response.Content = "The quoted seller is no longer available for that refinement. Refresh the board for the next cheapest relic.");
+                return;
+            }
+            var seller = order.Seller.Replace('\r', ' ').Replace('\n', ' ').Replace('`', '\'');
+            var price = order.Price.ToString("0.##", CultureInfo.InvariantCulture);
+            var whisper = $"/w {seller} Hi! I want to buy: {itemName} ({relic.Refinement}) for {price} platinum. (warframe.market)";
+            var embed = new EmbedBuilder().WithTitle($"💬 Buy {itemName}")
+                .WithDescription($"For **{setName}** · {relic.Refinement}\n```text\n{whisper}\n```")
+                .WithColor(new Color(0x2ECC71)).AddField("Seller", $"`{seller}`", true)
+                .AddField("Current ask", $"{price}p each", true)
+                .AddField("Available", order.Quantity.HasValue ? $"×{order.Quantity:0.##}" : "Not reported", true);
+            if (!string.IsNullOrWhiteSpace(order.SellerSlug))
+                embed.AddField("Warframe Market", $"[Open seller profile](https://warframe.market/profile/{Uri.EscapeDataString(order.SellerSlug)})");
+            embed.WithFooter("Copy the /w command into Warframe yourself. RelicFrame never contacts the seller.");
+            await interaction.ModifyOriginalResponseAsync(response => { response.Content = ""; response.Embed = embed.Build(); });
+        }
+        catch (Exception error)
+        {
+            Console.WriteLine($"[prime-set-completion-relic-whisper] {error.GetType().Name}: {error.Message}");
+            try { await interaction.ModifyOriginalResponseAsync(response => response.Content = "Could not load that relic seller. Try again shortly."); }
+            catch { }
+        }
+    }
 
     private async Task DispatchButtonAsync(SocketMessageComponent interaction)
     {
@@ -213,5 +278,5 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
     private static string Signed(int value) => value >= 0 ? $"+{value}" : value.ToString();
     private void Save() => Json.WriteAtomic(statePath, state);
     public async Task StopAsync() { if (cancellation is not null) await cancellation.CancelAsync(); if (worker is not null) await worker; status = "stopped"; }
-    public async ValueTask DisposeAsync() { bot.ButtonExecuted -= DispatchButtonAsync; await StopAsync(); cancellation?.Dispose(); gate.Dispose(); renderGate.Dispose(); }
+    public async ValueTask DisposeAsync() { bot.ButtonExecuted -= DispatchButtonAsync; bot.SelectMenuExecuted -= DispatchSelectAsync; await StopAsync(); cancellation?.Dispose(); gate.Dispose(); renderGate.Dispose(); }
 }
