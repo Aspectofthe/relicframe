@@ -275,7 +275,9 @@ public static class RivenPricing
         }).Where(r => r.Price.HasValue).ToArray();
         var exact = rows.Where(r => r.Pos.SetEquals(wantedPos) && (r.Neg ?? "") == (negative ?? "")).ToArray();
         var similar = rows.Where(r => r.Similarity >= .66).OrderByDescending(r => r.Similarity).ThenBy(r => r.Price).ToArray();
-        var evidence = exact.Length >= 3 ? exact : similar.Take(20).ToArray();
+        // Even one exact roll is stronger price evidence than cheaper unrelated rolls.
+        // Confirmed sales can price an exact roll without any active exact ask.
+        var evidence = exact.Length > 0 ? exact : similar.Take(20).ToArray();
         var rawPrices = evidence.Select(r => r.Price!.Value).Order().ToArray();
         var prices = WithoutExtremeAskOutliers(rawPrices);
         if (prices.Length == 0) prices = rawPrices;
@@ -309,29 +311,16 @@ public static class RivenPricing
             _ => -8
         } : null;
         var weeklyAnchor = weekly is { Median: > 0 } ? weekly.Median : (double?)null;
-        double AskWeight((int? Price, HashSet<string> Pos, string? Neg, double Similarity, string Status, DateTimeOffset? Created) row)
-        {
-            var availability = row.Status is "online" or "ingame" ? 1.35 : .72;
-            var ageDays = row.Created.HasValue ? Math.Max(0, (DateTimeOffset.UtcNow - row.Created.Value).TotalDays) : 30;
-            var freshness = ageDays <= 7 ? 1.15 : ageDays <= 30 ? 1 : ageDays <= 90 ? .78 : .52;
-            return Math.Pow(Math.Clamp(row.Similarity, .35, 1.2), 3) * availability * freshness;
-        }
-        var weightedAsks = retainedEvidence.Select(row => ((double)row.Price!.Value, AskWeight(row))).ToArray();
         var ageFactor = 1 + (listingAgeAdjustment ?? 0) / 100;
-        var quickAsk = WeightedQuantile(weightedAsks, .18) * ageFactor;
-        var fairAsk = WeightedQuantile(weightedAsks, .35) * ageFactor;
-        var patientAsk = WeightedQuantile(weightedAsks, .65) * ageFactor;
-        double EvidenceEstimate(double ask, double confirmedFactor)
-        {
-            var anchors = new List<(double Value, double Weight)>();
-            if (ask > 0) anchors.Add((ask, .45));
-            if (weeklyAnchor.HasValue) anchors.Add((weeklyAnchor.Value, weekly?.SourceAsOf is { } asOf && DateTimeOffset.UtcNow - asOf > TimeSpan.FromDays(90) ? .05 : .12));
-            if (confirmedMedian.HasValue) anchors.Add((confirmedMedian.Value * (1 + (saleVelocityAdjustment ?? 0) / 100) * confirmedFactor, .85));
-            return anchors.Count == 0 ? 0 : anchors.Sum(x => x.Value * x.Weight) / anchors.Sum(x => x.Weight);
-        }
-        var quickEstimate = EvidenceEstimate(quickAsk, .92);
-        var estimate = EvidenceEstimate(fairAsk, 1);
-        var patientEstimate = EvidenceEstimate(patientAsk, 1.08);
+        var pricedAsks = retainedEvidence.Select(row => (double)row.Price!.Value * ageFactor).ToArray();
+        // Avoid mixing near-roll asks into a median supported by confirmed exact sales.
+        if (exact.Length == 0 && confirmed.Length > 0) pricedAsks = [];
+        var saleFactor = 1 + (saleVelocityAdjustment ?? 0) / 100;
+        var comparablePrices = pricedAsks.Concat(confirmed.Select(row => row.Price * saleFactor)).ToArray();
+        var weightedComparablePrices = comparablePrices.Select(price => (price, 1d)).ToArray();
+        var estimate = comparablePrices.Length > 0 ? Median(comparablePrices) : weeklyAnchor ?? 0;
+        var quickEstimate = comparablePrices.Length > 0 ? WeightedQuantile(weightedComparablePrices, .25) : estimate * .88;
+        var patientEstimate = comparablePrices.Length > 0 ? WeightedQuantile(weightedComparablePrices, .75) : estimate * 1.15;
         double? quality = null;
         var grades = new List<RivenStatGrade>();
         if (positiveValues is not null && positiveValues.Any(v => v.HasValue))
@@ -379,7 +368,7 @@ public static class RivenPricing
             medianAge, closures.Length, closures.Length == 0 ? null : Median(closures), weekly,
             quality, signature, confirmed.Length, confirmedMedian, confirmedMedianLifetime,
             masteryRank, modRank, rerolls, endo,
-            "Fair price uses a similarity-, availability-, and freshness-weighted 35th percentile of current asks; quick/patient use the 18th/65th percentiles. Confirmed matching sales receive the strongest weight. Weekly figures are stale family trades without roll details; observed closures may be sales or withdrawals.",
+            "Fair price uses the median of matching current asks and confirmed exact-roll sales, when available; quick/patient use the lower/upper quartiles. Stale asks and sale velocity receive small displayed adjustments before the median. Weekly family trades are a fallback only, without roll details; observed closures may be sales or withdrawals.",
             guidance, grades, assessment?.Desired, assessment?.Preferred, assessment?.Note ?? "",
             profileSource, rollRule?.PositiveExpression ?? "", rollRule?.HarmlessNegatives ?? [], excludedAskOutliers,
             listingAgeAdjustment, saleVelocityAdjustment);

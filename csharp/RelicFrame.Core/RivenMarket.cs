@@ -453,6 +453,30 @@ public sealed class RivenMarket : IAsyncDisposable
         }
         finally { gate.Release(); }
     }
+    private async Task<JsonElement[]> FetchMatchingAuctionsAsync(string slug, string[] positives, string? negative, CancellationToken ct)
+    {
+        var signature = RivenPricing.Signature(positives, negative);
+        var key = $"{slug}|{signature}";
+        var now = DateTimeOffset.UtcNow;
+        if (auctionCache.TryGetValue(key, out var cached) && now - cached.FetchedAt < TimeSpan.FromSeconds(30)) return cached.Rows;
+        var gate = auctionFetchLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            now = DateTimeOffset.UtcNow;
+            if (auctionCache.TryGetValue(key, out cached) && now - cached.FetchedAt < TimeSpan.FromSeconds(30)) return cached.Rows;
+            var stats = string.Join(',', positives.Select(RivenPricing.NormalizeStat).Distinct().Order(StringComparer.Ordinal));
+            var negativeStat = string.IsNullOrWhiteSpace(negative) ? "None" : RivenPricing.NormalizeStat(negative);
+            var url = $"https://api.warframe.market/v1/auctions/search?type=riven&weapon_url_name={Uri.EscapeDataString(slug)}&positive_stats={Uri.EscapeDataString(stats)}&negative_stats={Uri.EscapeDataString(negativeStat)}&operation=allOf&sort_by=price_asc&buyout_policy=direct";
+            using var document = await http.GetJsonAsync(url, ct);
+            var auctions = document.RootElement.Get("payload").Get("auctions");
+            if (auctions.ValueKind != JsonValueKind.Array) throw new JsonException("Missing matching auction array.");
+            var rows = auctions.Rows().Select(row => row.Clone()).ToArray();
+            auctionCache[key] = (DateTimeOffset.UtcNow, rows);
+            return rows;
+        }
+        finally { gate.Release(); }
+    }
     private async Task ObserveAsync(string weaponSlug, JsonElement[] auctions, CancellationToken ct, bool persist)
     {
         await observationsLock.WaitAsync(ct);
@@ -531,7 +555,13 @@ public sealed class RivenMarket : IAsyncDisposable
         CancellationToken ct = default)
     {
         await EnsureReferencesAsync(ct); var resolved = ResolveWeapon(query); var slug = resolved.Market.Get("slug").Text();
-        var auctions = await FetchAuctionsAsync(slug, ct); var weeklyPrice = RivenPricing.ParseWeekly(weekly, resolved.Family, rerolled);
+        var auctions = await FetchAuctionsAsync(slug, ct);
+        // The broad, cheapest-first search can omit valuable exact rolls. Require a
+        // stat-filtered search before quoting an exact-match count or price.
+        var matching = await FetchMatchingAuctionsAsync(slug, positives, negative, ct);
+        var pricedAuctions = auctions.Concat(matching).GroupBy(row => row.Get("id").Text(), StringComparer.Ordinal)
+            .Select(group => group.First()).ToArray();
+        var weeklyPrice = RivenPricing.ParseWeekly(weekly, resolved.Family, rerolled);
         var signature = RivenPricing.Signature(positives, negative);
         (string Signature, double LifetimeHours)[] closures;
         await observationsLock.WaitAsync(ct);
@@ -545,7 +575,7 @@ public sealed class RivenMarket : IAsyncDisposable
         }
         finally { observationsLock.Release(); }
         var (appraisalRule, profileSource) = ResolveDesirabilityRule(resolved.Family, auctions, resolved.StatClass, resolved.Disposition ?? 1);
-        return RivenPricing.Appraise(auctions, resolved.Name, slug, positives, negative, weeklyPrice, closures,
+        return RivenPricing.Appraise(pricedAuctions, resolved.Name, slug, positives, negative, weeklyPrice, closures,
             resolved.StatClass, resolved.Disposition ?? 1, positiveValues, negativeValue, confirmed, masteryRank, modRank, rerolls, appraisalRule, profileSource);
     }
     public async Task<bool> RecordOutcomeAsync(RivenAppraisal appraisal, string outcome, int? price, DateTimeOffset? listedAt,

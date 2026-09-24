@@ -148,7 +148,7 @@ internal static class RivenCommands
               $"Supported harmless negatives: {harmless}.\n" +
               $"Assessment: **{appraisal.DesiredPositiveCount}/{appraisal.Positives.Length} desired positives** · {(appraisal.PreferredRoll == true ? "preferred selling roll" : "not a preferred selling roll")}. {appraisal.RollUsefulness}"
             : "";
-        const string disclaimer = "Fair uses the weighted 35th percentile of comparable asks; Quick/Patient use the 18th/65th percentiles. Asks are not sales. Confirmed matching sales get the strongest weight; the DE archive is stale and has no roll details.";
+        const string disclaimer = "Fair uses the median of matching asks and confirmed exact-roll sales; Quick/Patient use the lower/upper quartiles. Asks are not sales. The DE archive is stale and has no roll details.";
         var content = $"**{appraisal.WeaponName} appraisal** · {appraisal.Confidence} confidence{quality}\n{stats}\n" +
             grades + guidance + usefulness + "\n" +
             $"Quick sale: **{P(appraisal.QuickPrice)}** · Fair: **{P(appraisal.RecommendedPrice)}** · Patient: **{P(appraisal.PatientPrice)}**\n" +

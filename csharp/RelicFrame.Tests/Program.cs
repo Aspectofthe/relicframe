@@ -462,7 +462,7 @@ using (var appraisalDoc = JsonDocument.Parse("""
     var appraisal = RivenPricing.Appraise(appraisalDoc.RootElement.Rows(), "Test", "test", ["critical chance", "critical damage"], "zoom",
         new WeeklyPrice("Test", "Riven Mod", true, 120, 125, 20, 500, 10, 2), [(RivenPricing.Signature(["critical_chance", "critical_damage"], "zoom"), 24)],
         positiveValues: [150, 120]);
-    Assert(appraisal.ExactAsks == 2 && appraisal.OnlineAsks == 1 && appraisal.MedianAsk == 150, "Riven appraisal separates exact and close asks");
+    Assert(appraisal.ExactAsks == 2 && appraisal.OnlineAsks == 1 && appraisal.MedianAsk == 125, "Riven appraisal separates exact and close asks");
     Assert(appraisal.ObservedClosures == 1 && appraisal.RollQualityPct.HasValue && appraisal.QuickPrice < appraisal.RecommendedPrice && appraisal.PatientPrice > appraisal.RecommendedPrice, "Riven appraisal includes timing, supplied roll quality and sale-speed prices");
     var soldAppraisal = RivenPricing.Appraise(appraisalDoc.RootElement.Rows(), "Test", "test", ["critical chance", "critical damage"], "zoom",
         null, [], confirmedSales: [(RivenPricing.Signature(["critical_chance", "critical_damage"], "zoom"), 300, 12d)]);
@@ -520,8 +520,22 @@ using (var appraisalDoc = JsonDocument.Parse("""
     }));
     using var liquidDoc = JsonDocument.Parse(liquidJson);
     var liquid = RivenPricing.Appraise(liquidDoc.RootElement.Rows(), "Test", "test", ["critical_chance", "critical_damage"], null, null, []);
-    Assert(liquid.MedianAsk > 200 && liquid.RecommendedPrice < 200,
-        "Riven fair value favors fresh actionable sellers instead of the midpoint of stale offline asks");
+    Assert(liquid.MedianAsk == 255 && liquid.RecommendedPrice == 255,
+        "Riven fair value uses the median matching ask instead of overweighting the cheapest listings");
+    var exactAskJson = JsonSerializer.Serialize(new[] { 750, 900, 900, 1000, 1000 }.Select((price, i) => new { id = $"torid-{i}", buyout_price = price,
+        owner = new { status = "online" }, item = new { attributes = new[] { new { url_name = "critical_damage", positive = true },
+            new { url_name = "multishot", positive = true }, new { url_name = "fire_rate_/_attack_speed", positive = true },
+            new { url_name = "recoil", positive = false } } } }));
+    using var exactAskDoc = JsonDocument.Parse(exactAskJson);
+    var toridSignature = RivenPricing.Signature(["critical_damage", "multishot", "fire_rate_/_attack_speed"], "recoil");
+    var toridAsks = RivenPricing.Appraise(exactAskDoc.RootElement.Rows(), "Torid", "torid",
+        ["critical_damage", "multishot", "fire_rate_/_attack_speed"], "recoil", null, []);
+    var toridMixed = RivenPricing.Appraise(exactAskDoc.RootElement.Rows(), "Torid", "torid",
+        ["critical_damage", "multishot", "fire_rate_/_attack_speed"], "recoil", null, [],
+        confirmedSales: [(toridSignature, 600, null), (toridSignature, 700, null)]);
+    Assert(toridAsks.ExactAsks == 5 && toridAsks.MedianAsk == 900 && toridAsks.RecommendedPrice == 900
+        && toridMixed.ConfirmedSales == 2 && toridMixed.RecommendedPrice == 900,
+        "exact Torid asks set the median, and confirmed exact sales join the same median pool");
     try { RivenPricing.Appraise([], "Test", "test", ["critical_chance", "critical_damage"], null, null, [], positiveValues: [double.NaN, 100]); throw new Exception("NaN Riven value accepted"); }
     catch (ArgumentException) { }
     try { RivenPricing.Appraise([], "Test", "test", ["critical_chance", "critical_damage"], "critical_chance", null, []); throw new Exception("same positive and negative Riven attribute accepted"); }
@@ -668,7 +682,8 @@ try
         var directDeals = await service.FindDealsAsync("Test", onlineOnly: false);
         Assert(directDeals.Length > 0 && directDeals.All(d => d.CuratedProfile == "CC CD MS" && d.CuratedNotes.StartsWith("curated weapon profile:")),
             "manual flip search cannot bypass the curated per-weapon desirability rule");
-        Assert(feedHandler.WeaponFetches == 1, "guided form, appraisal and immediate flip lookup share the short per-weapon auction cache");
+        Assert(feedHandler.WeaponFetches == 2 && feedHandler.ExactSearches == 1 && feedHandler.ExactQueryValid && serviceAppraisal.ExactAsks == 9,
+            "appraisal adds one exact-stat search while form and flips share the broad auction cache");
         var recorded = await service.RecordOutcomeAsync(serviceAppraisal, "sold", 275, DateTimeOffset.UtcNow.AddHours(-8), DateTimeOffset.UtcNow, "test-reporter");
         var duplicate = await service.RecordOutcomeAsync(serviceAppraisal, "sold", 275, DateTimeOffset.UtcNow.AddHours(-8), DateTimeOffset.UtcNow, "test-reporter");
         Assert(recorded && !duplicate, "repeated Riven outcome submission is idempotent within the safety window");
@@ -1107,6 +1122,8 @@ sealed class RivenFeedHandler : HttpMessageHandler
 {
     public int Searches;
     public int WeaponFetches;
+    public int ExactSearches;
+    public bool ExactQueryValid;
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested(); var uri = request.RequestUri!.ToString(); string json;
@@ -1116,7 +1133,13 @@ sealed class RivenFeedHandler : HttpMessageHandler
         else
         {
             if (uri.Contains("weapon_url_name=")) Interlocked.Increment(ref WeaponFetches); else Interlocked.Increment(ref Searches);
-            var rows = new[] { 20, 100, 200, 300, 400, 500 }.Select((p, i) => new { id = $"synthetic-{i}", buyout_price = p,
+            if (uri.Contains("weapon_url_name=") && uri.Contains("positive_stats="))
+            {
+                ExactQueryValid = uri.Contains("negative_stats=zoom") && uri.Contains("operation=allOf") && uri.Contains("multishot");
+                Interlocked.Increment(ref ExactSearches);
+            }
+            var prices = uri.Contains("weapon_url_name=") && uri.Contains("positive_stats=") ? new[] { 750, 900, 1000 } : new[] { 20, 100, 200, 300, 400, 500 };
+            var rows = prices.Select((p, i) => new { id = p >= 750 ? $"exact-{i}" : $"synthetic-{i}", buyout_price = p,
                 owner = new { ingame_name = "TestOnly", slug = "test-only", status = "online" },
                 item = new { weapon_url_name = "test", attributes = new[] { new { url_name = "critical_chance", positive = true, value = 140d }, new { url_name = "critical_damage", positive = true, value = 115d }, new { url_name = "multishot", positive = true, value = 85d }, new { url_name = "zoom", positive = false, value = -40d } } } });
             json = JsonSerializer.Serialize(new { payload = new { auctions = rows } });
