@@ -170,6 +170,38 @@ var setDecrease = new Dictionary<string, ObservedInventoryDecrease>
 Assert(TradeInventoryCache.QuantityStillInCache("set", 1, tradeTime, setDecrease, [listingDefinition]) == 0
     && setDecrease.Count == 0,
     "a delayed completed-set trade consumes matching component changes without deducting the set twice");
+var missingOrders = new Dictionary<string, MissingManagedOrderHold>(StringComparer.Ordinal)
+{
+    ["blade"] = new("lost-blade-order", 3, tradeTime),
+    ["set"] = new("lost-set-order", 1, tradeTime)
+};
+var suppressedStock = TradeInventoryCache.SuppressedStock(
+    new Dictionary<string, int> { ["blade"] = 1 }, missingOrders, [listingDefinition]);
+Assert(suppressedStock["blade"] == 6 && suppressedStock["blueprint"] == 1,
+    "missing managed orders suppress stale part stock and every component of a set without counting them as sales");
+var heldInventory = PrimeInventory.SubtractPendingSales(
+    [new PrimeInventoryEntry("blueprint", 2), new PrimeInventoryEntry("blade", 6)],
+    suppressedStock, row => row.GameRef);
+Assert(heldInventory is [{ GameRef: "blueprint", Quantity: 1 }],
+    "a disappeared managed order cannot be recreated from unchanged cached inventory");
+Assert(TradeInventoryCache.ConsumeMissingOrderHold(missingOrders, "blade", 1) == 3
+    && !missingOrders.ContainsKey("blade"),
+    "a confirmed sale releases the whole conservative hold so remaining genuine stock can be listed");
+Assert(TradeInventoryCache.ConsumeMissingOrderHold(missingOrders, "set", 0) == 0
+    && missingOrders.ContainsKey("set"),
+    "an unconfirmed order disappearance remains held across refreshes");
+Assert(TradeInventoryCache.AdditionalConfirmedSaleDeduction(1, 0) == 0
+    && TradeInventoryCache.AdditionalConfirmedSaleDeduction(2, 1) == 1,
+    "a completed trade does not deduct stock a prior managed-order reduction already suppressed");
+var freshHold = new MissingManagedOrderHold("lost-order", 2, tradeTime);
+Assert(!TradeInventoryCache.FreshSnapshotResolvesHold(freshHold, 1, tradeTime)
+    && !TradeInventoryCache.FreshSnapshotResolvesHold(freshHold, 2, tradeTime.AddMinutes(1))
+    && TradeInventoryCache.FreshSnapshotResolvesHold(freshHold, 1, tradeTime.AddMinutes(1)),
+    "only a newer inventory snapshot with reduced stock clears a missing-order hold");
+var savedHolds = JsonSerializer.Deserialize<Dictionary<string, MissingManagedOrderHold>>(
+    JsonSerializer.Serialize(missingOrders, Json.Options), Json.Options);
+Assert(savedHolds is not null && savedHolds["set"] == missingOrders["set"],
+    "missing-order holds survive a bot restart in the persisted market state");
 var ayaRanking = new AyaValueRow[]
 {
     new("Lith A1 Relic", 1, 10, 40, "Alpha Prime Blueprint", 100, 2),

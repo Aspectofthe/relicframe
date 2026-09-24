@@ -20,6 +20,7 @@ internal sealed record PersonalMarketState
     public Dictionary<string, int> ManagedOrderQuantities { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> ManagedOrderPrices { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> PendingSoldQuantities { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, MissingManagedOrderHold> MissingManagedOrderHolds { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, ObservedInventoryDecrease> RecentInventoryDecreases { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, ObservedInventoryDecrease> RecentOrderReductions { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> UnmatchedAlecaSaleQuantities { get; set; } = new(StringComparer.Ordinal);
@@ -71,6 +72,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
     private Task? worker;
     private bool reconciliationPending;
     private string status = "stopped";
+    private string alecaTradeStatus = "not checked";
     public string Status => Volatile.Read(ref status);
     public string ExcludedSellerSlug => ownSellerSlug;
     public ulong OwnerId => configuredOwner;
@@ -110,6 +112,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         state.ManagedOrderIds ??= new(StringComparer.Ordinal); state.LastInventory ??= new(StringComparer.OrdinalIgnoreCase);
         state.ManagedOrderQuantities ??= new(StringComparer.Ordinal); state.ManagedOrderPrices ??= new(StringComparer.Ordinal);
         state.PendingSoldQuantities ??= new(StringComparer.Ordinal);
+        state.MissingManagedOrderHolds ??= new(StringComparer.Ordinal);
         state.RecentInventoryDecreases ??= new(StringComparer.Ordinal);
         state.RecentOrderReductions ??= new(StringComparer.Ordinal);
         state.UnmatchedAlecaSaleQuantities ??= new(StringComparer.Ordinal);
@@ -219,7 +222,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         try
         {
             var raw = PrimeInventory.Load(inventoryPath);
-            return PrimeInventory.SubtractPendingSales(raw, state.PendingSoldQuantities, ItemIdForInventory);
+            return AvailableInventory(raw);
         }
         finally { gate.Release(); }
     }
@@ -250,7 +253,6 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             }
             setDefinitions = definitions;
         }
-        sourceActions.AddRange(await ObserveAlecaTradesAsync(rawInventory, ct));
         IReadOnlyList<WfmOwnOrder>? orders = null;
         var marketUsable = market.ReadyBooks > 0 && !market.IsBootstrapping;
         if (marketUsable && (state.AutoPublishEnabled == true || state.ManagedOrderIds.Count > 0))
@@ -258,10 +260,13 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             orders = await account.OrdersAsync(ct);
             sourceActions.AddRange(ObserveManagedOrderChanges(orders, rawInventory));
         }
+        // Record vanished/reduced managed orders before reading completed trades,
+        // so a sale reported in this same cycle can resolve their provisional hold.
+        sourceActions.AddRange(await ObserveAlecaTradesAsync(rawInventory, ct));
         // Observe the market first. If AlecaFrame refreshed in the same interval, its
         // matching raw decrease then clears the newly-created temporary deduction.
         sourceActions.AddRange(ReconcileAlecaSnapshot(rawInventory));
-        var inventory = PrimeInventory.SubtractPendingSales(rawInventory, state.PendingSoldQuantities, ItemIdForInventory);
+        var inventory = AvailableInventory(rawInventory);
         var portfolioPositions = inventory.Select(item => new
         {
             Item = item,
@@ -359,8 +364,10 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 $"• **{sale.ItemName}** ×{sale.Quantity}{(sale.PlatinumEach > 0 ? $" at {sale.PlatinumEach}p each" : "")} · {(sale.OrderId.StartsWith("alecaframe:", StringComparison.Ordinal) ? "completed trade" : "order change; provisional")} · <t:{sale.DetectedAt.ToUnixTimeSeconds()}:R>"));
         }
         var pendingSold = state.PendingSoldQuantities.Values.Sum(value => Math.Max(0, value));
-        var alecaTradeMode = File.Exists(alecaPublicTokenPath) ? "completed-trade feed connected" : $"not connected; add a trades-only public token at `{alecaPublicTokenPath}`";
-        description += $"\nAlecaFrame {alecaTradeMode}. Completed sales and managed Warframe.market quantity reductions remove stale stock immediately. Pending stale-cache deduction: **{pendingSold}** item(s).";
+        var heldOrders = state.MissingManagedOrderHolds.Values.Sum(hold => Math.Max(0, hold.Quantity));
+        var alecaTradeMode = File.Exists(alecaPublicTokenPath) ? alecaTradeStatus
+            : $"not connected; add a trades-only public token at `{alecaPublicTokenPath}`";
+        description += $"\nAlecaFrame {alecaTradeMode}. Completed sales and managed Warframe.market quantity reductions remove stale stock immediately. Pending stale-cache deduction: **{pendingSold}** item(s) · missing-order safety hold: **{heldOrders}** unit(s). A vanished order is not counted as a sale or automatically relisted from stale inventory.";
         var snapshot = new BoardSnapshot(quotes, state.ManagedOrderIds.Keys.ToHashSet(StringComparer.Ordinal),
             emptyDescription, description, state.LastAccountSync,
             state.AutoPublishEnabled == true, state.SellCompleteSets, state.ProtectIncompleteSets);
@@ -496,18 +503,29 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         return string.IsNullOrWhiteSpace(name) ? null : market.ItemIdForName(name);
     }
 
+    private IReadOnlyList<PrimeInventoryEntry> AvailableInventory(IReadOnlyList<PrimeInventoryEntry> raw)
+    {
+        var suppressed = TradeInventoryCache.SuppressedStock(
+            state.PendingSoldQuantities, state.MissingManagedOrderHolds, setDefinitions);
+        return PrimeInventory.SubtractPendingSales(raw, suppressed, ItemIdForInventory);
+    }
+
     private async Task<IReadOnlyList<string>> ObserveAlecaTradesAsync(IReadOnlyList<PrimeInventoryEntry> rawInventory, CancellationToken ct)
     {
-        if (!File.Exists(alecaPublicTokenPath)) return [];
+        if (!File.Exists(alecaPublicTokenPath)) { alecaTradeStatus = "not connected"; return []; }
         string token;
         try { token = (await File.ReadAllTextAsync(alecaPublicTokenPath, ct)).Trim(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
+            alecaTradeStatus = "token file unreadable";
             Console.WriteLine($"[personal-market] AlecaFrame public-token file unavailable ({error.GetType().Name}).");
             return ["• AlecaFrame completed-trade feed is unavailable; its public-token file could not be read."];
         }
         if (token.Length is < 8 or > 2048)
+        {
+            alecaTradeStatus = "token file invalid";
             return ["• AlecaFrame completed-trade feed is disabled because its public-token file is empty or invalid."];
+        }
 
         IReadOnlyList<AlecaCompletedTrade> trades;
         try
@@ -518,9 +536,11 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         }
         catch (Exception error) when (!ct.IsCancellationRequested && error is not OutOfMemoryException)
         {
+            alecaTradeStatus = $"last check failed ({error.GetType().Name})";
             Console.WriteLine($"[personal-market] AlecaFrame completed-trade feed failed ({error.GetType().Name}); no inventory changes were made.");
             return ["• AlecaFrame completed-trade feed could not be checked; no inventory was deducted."];
         }
+        alecaTradeStatus = $"completed-trade feed checked <t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:R>; {trades.Count} record(s) returned";
         if (trades.Count == 0) return [];
 
         var processed = state.ProcessedAlecaTradeIds.ToHashSet(StringComparer.Ordinal);
@@ -553,20 +573,26 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 setDefinitions.Any(set => set.SetItemId == row.ItemId))).ToArray();
             foreach (var sold in mapped)
             {
+                var releasedHold = TradeInventoryCache.ConsumeMissingOrderHold(
+                    state.MissingManagedOrderHolds, sold.ItemId!, sold.Item.Quantity);
                 var stillInCache = TradeInventoryCache.QuantityStillInCache(sold.ItemId!, sold.Item.Quantity,
                     trade.Timestamp, state.RecentInventoryDecreases, setDefinitions);
-                AddPendingSale(sold.ItemId!, stillInCache);
                 var unmatchedOrderQuantity = TradeInventoryCache.QuantityStillInCache(sold.ItemId!, sold.Item.Quantity,
                     trade.Timestamp, state.RecentOrderReductions, []);
+                var additionalDeduction = TradeInventoryCache.AdditionalConfirmedSaleDeduction(
+                    stillInCache, unmatchedOrderQuantity);
+                AddPendingSale(sold.ItemId!, additionalDeduction);
                 if (unmatchedOrderQuantity > 0)
                     state.UnmatchedAlecaSaleQuantities[sold.ItemId!] =
                         state.UnmatchedAlecaSaleQuantities.GetValueOrDefault(sold.ItemId!) + unmatchedOrderQuantity;
                 var priceEach = mapped.Length == 1 ? Math.Max(0, trade.TotalPlatinum / sold.Item.Quantity) : 0;
                 state.SaleHistory = state.SaleHistory.Append(new(sold.ItemId!, sold.Name, "alecaframe:" + trade.Id[..12],
                     sold.Item.Quantity, priceEach, trade.Timestamp)).OrderByDescending(row => row.DetectedAt).Take(100).ToArray();
-                actions.Add(stillInCache > 0
-                    ? $"• AlecaFrame completed sale: removed **{sold.Name}** ×{stillInCache} from cached available inventory."
-                    : $"• AlecaFrame completed sale of **{sold.Name}** ×{sold.Item.Quantity} was already reflected in the inventory cache.");
+                actions.Add(additionalDeduction > 0
+                    ? $"• AlecaFrame completed sale: removed **{sold.Name}** ×{additionalDeduction} from cached available inventory."
+                    : $"• AlecaFrame completed sale of **{sold.Name}** ×{sold.Item.Quantity} was already accounted for by inventory or a managed-order reduction.");
+                if (releasedHold > 0)
+                    actions.Add($"• Replaced the missing-order safety hold for **{sold.Name}** ×{releasedHold} with confirmed-trade reconciliation.");
             }
         }
         state.ProcessedAlecaTradeIds = trades.Where(row => row.Timestamp == state.AlecaTradeWatermark && processed.Contains(row.Id))
@@ -592,6 +618,9 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         TradeInventoryCache.ForgetOldDecreases(state.RecentInventoryDecreases, now);
         TradeInventoryCache.ForgetOldDecreases(state.RecentOrderReductions, now);
         var current = rawInventory.ToDictionary(row => row.GameRef, row => row.Quantity, StringComparer.OrdinalIgnoreCase);
+        var rawByItemId = rawInventory.Select(row => (Id: ItemIdForInventory(row), row.Quantity))
+            .Where(row => row.Id is not null).GroupBy(row => row.Id!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Sum(row => row.Quantity), StringComparer.Ordinal);
         var decreasesByItemId = new Dictionary<string, int>(StringComparer.Ordinal);
         if (state.LastInventory.Count > 0)
         {
@@ -630,6 +659,17 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 else state.UnmatchedAlecaSaleQuantities[pendingAleca.Key] = pendingAleca.Value - confirmed;
             }
         }
+        var snapshotTime = new DateTimeOffset(File.GetLastWriteTimeUtc(inventoryPath), TimeSpan.Zero);
+        foreach (var held in state.MissingManagedOrderHolds.ToArray())
+        {
+            var set = setDefinitions.FirstOrDefault(definition => definition.SetItemId == held.Key);
+            var remaining = set is null ? rawByItemId.GetValueOrDefault(held.Key)
+                : set.Components.Count == 0 ? 0
+                : set.Components.Min(component => rawByItemId.GetValueOrDefault(component.ItemId) / Math.Max(1, component.Quantity));
+            if (!TradeInventoryCache.FreshSnapshotResolvesHold(held.Value, remaining, snapshotTime)) continue;
+            state.MissingManagedOrderHolds.Remove(held.Key);
+            actions.Add($"• Fresh inventory confirms **{market.NameForItemId(held.Key) ?? "Prime item"}** stock fell from {held.Value.Quantity} to {remaining}; its missing-order safety hold was cleared.");
+        }
         state.LastInventory = current;
         return actions;
     }
@@ -638,6 +678,15 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
     {
         var actions = new List<string>();
         var ordersById = orders.Where(order => order.Type == "sell").ToDictionary(order => order.Id, StringComparer.Ordinal);
+        foreach (var held in state.MissingManagedOrderHolds.ToArray())
+        {
+            if (!ordersById.TryGetValue(held.Value.OrderId, out var restored)) continue;
+            state.MissingManagedOrderHolds.Remove(held.Key);
+            state.ManagedOrderIds[held.Key] = restored.Id;
+            state.ManagedOrderQuantities[held.Key] = restored.Quantity;
+            state.ManagedOrderPrices[held.Key] = restored.Platinum;
+            actions.Add($"• **{market.NameForItemId(held.Key) ?? "Prime item"}** order returned; its missing-order safety hold was cleared.");
+        }
         foreach (var managed in state.ManagedOrderIds.ToArray())
         {
             ordersById.TryGetValue(managed.Value, out var current);
@@ -655,9 +704,22 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             if (current is null)
             {
                 // An absent order can be a manual delete, upstream omission, or an
-                // interrupted reconciliation. It is not proof that a trade completed.
+                // interrupted reconciliation. It is not proof of a sale, but its
+                // stock cannot be safely relisted from an unchanged AlecaFrame file.
+                var raw = rawInventory.FirstOrDefault(row => ItemIdForInventory(row) == managed.Key)?.Quantity ?? 0;
+                var set = setDefinitions.FirstOrDefault(definition => definition.SetItemId == managed.Key);
+                if (set is not null)
+                    raw = set.Components.Count == 0 ? 0 : set.Components.Min(component =>
+                        (rawInventory.FirstOrDefault(row => ItemIdForInventory(row) == component.ItemId)?.Quantity ?? 0)
+                        / Math.Max(1, component.Quantity));
+                // Hold all currently shown copies, not merely the vanished
+                // order's quantity. Otherwise a stale extra copy can be
+                // published as a fresh order and disappear again in a loop.
+                var held = Math.Max(0, raw);
+                if (held > 0 && !state.MissingManagedOrderHolds.ContainsKey(managed.Key))
+                    state.MissingManagedOrderHolds[managed.Key] = new(managed.Value, held, DateTimeOffset.UtcNow);
                 state.ManagedOrderIds.Remove(managed.Key); state.ManagedOrderQuantities.Remove(managed.Key); state.ManagedOrderPrices.Remove(managed.Key);
-                actions.Add($"• Managed order for **{market.NameForItemId(managed.Key) ?? "Prime item"}** disappeared; no sale was inferred and owned stock remains eligible for relisting.");
+                actions.Add($"• Managed order for **{market.NameForItemId(managed.Key) ?? "Prime item"}** disappeared; no sale was inferred, and {held} uncertain unit(s) are held from relisting until a confirmed trade or fresh inventory resolves them.");
                 continue;
             }
             var remaining = current.Quantity;

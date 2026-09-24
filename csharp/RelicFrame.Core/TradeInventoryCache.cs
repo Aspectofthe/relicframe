@@ -1,10 +1,54 @@
 namespace RelicFrame.Core;
 
 public sealed record ObservedInventoryDecrease(int Quantity, DateTimeOffset ObservedAt);
+public sealed record MissingManagedOrderHold(string OrderId, int Quantity, DateTimeOffset ObservedAt);
 
 public static class TradeInventoryCache
 {
     private static readonly TimeSpan MaximumTradeFeedLag = TimeSpan.FromHours(2);
+
+    // A vanished market order is not a confirmed sale, but it must not be
+    // recreated from an unchanged, potentially stale inventory snapshot.
+    // Keep that uncertainty separate from confirmed-sale deductions.
+    public static Dictionary<string, int> SuppressedStock(
+        IReadOnlyDictionary<string, int> confirmedSales,
+        IReadOnlyDictionary<string, MissingManagedOrderHold> missingOrders,
+        IReadOnlyList<PrimeSetDefinition> definitions)
+    {
+        var suppressed = new Dictionary<string, int>(confirmedSales, StringComparer.Ordinal);
+        foreach (var held in missingOrders)
+        {
+            var set = definitions.FirstOrDefault(definition => definition.SetItemId == held.Key);
+            if (set is null) Add(held.Key, held.Value.Quantity);
+            else foreach (var component in set.Components)
+                Add(component.ItemId, checked(held.Value.Quantity * component.Quantity));
+        }
+        return suppressed;
+
+        void Add(string itemId, int quantity)
+        {
+            if (quantity <= 0) return;
+            suppressed[itemId] = checked(suppressed.GetValueOrDefault(itemId) + quantity);
+        }
+    }
+
+    public static int ConsumeMissingOrderHold(IDictionary<string, MissingManagedOrderHold> missingOrders,
+        string itemId, int confirmedQuantity)
+    {
+        if (confirmedQuantity <= 0 || !missingOrders.TryGetValue(itemId, out var hold)) return 0;
+        // Once the disappearance is explained by a real trade, the confirmed
+        // sale deduction replaces the whole conservative hold. Remaining raw
+        // copies are then eligible again instead of being hidden twice.
+        missingOrders.Remove(itemId);
+        return hold.Quantity;
+    }
+
+    public static int AdditionalConfirmedSaleDeduction(int stillInInventory, int notAlreadySuppressedByOrder)
+        => Math.Min(Math.Max(0, stillInInventory), Math.Max(0, notAlreadySuppressedByOrder));
+
+    public static bool FreshSnapshotResolvesHold(MissingManagedOrderHold hold,
+        int remainingStock, DateTimeOffset snapshotUpdatedAt)
+        => snapshotUpdatedAt > hold.ObservedAt && remainingStock < hold.Quantity;
 
     // A first connection may happen while AlecaFrame's inventory file is older
     // than a completed trade. Only those newer trades need a local deduction.
