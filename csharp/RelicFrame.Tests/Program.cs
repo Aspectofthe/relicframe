@@ -964,13 +964,17 @@ Assert(!wrappedSlideOcr.Notes.Any(note => note.Contains("Faction multiplier", St
         Assert(market.Snapshot(Refinement.Radiant).Prices["reward"] == 1, "removing seller exclusion restores retained order evidence");
         await market.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
     }
-    using (var invalidHttp = new MarketHttp(new MarketFeedHandler { InvalidOrders = true }, 2, 10000))
+    var invalidHandler = new MarketFeedHandler { InvalidOrders = true };
+    using (var invalidHttp = new MarketHttp(invalidHandler, 2, 10000))
     {
         await using var market = new LiveMarket(invalidHttp, catalogRelics, Path.Combine(temp, "invalid-market"));
         await market.StartAsync(true, default);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (!market.Status.StartsWith("partial")) await Task.Delay(10, timeout.Token);
         Assert(market.ReadyBooks == 0, "failed order fetches are not reported as loaded books");
+        var failedCalls = invalidHandler.OrderCalls;
+        Assert(!await market.EnsureBookAsync("Reward", default) && invalidHandler.OrderCalls == failedCalls,
+            "a failed market book is cooled down instead of immediately retried by another consumer");
         await market.StopAsync();
     }
     var setHandler = new PrimeSetFeedHandler();
@@ -1233,9 +1237,11 @@ sealed class RetryHandler : HttpMessageHandler
 sealed class MarketFeedHandler : HttpMessageHandler
 {
     public bool InvalidOrders;
+    public int OrderCalls;
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested(); var uri = request.RequestUri!.ToString(); string json;
+        if (uri.Contains("/orders/item/", StringComparison.Ordinal)) Interlocked.Increment(ref OrderCalls);
         if (uri.EndsWith("/items")) json = "{\"data\":[{\"slug\":\"wrong_relic\",\"i18n\":{\"en\":{\"name\":\"Lith Test\"}}},{\"slug\":\"correct_relic\",\"i18n\":{\"en\":{\"name\":\"Lith Test Relic\"}}},{\"slug\":\"current_relic\",\"i18n\":{\"en\":{\"name\":\"Lith Current Relic\"}}},{\"slug\":\"reward\",\"i18n\":{\"en\":{\"name\":\"Reward\"}}},{\"id\":\"personal-1\",\"slug\":\"personal_prime_blueprint\",\"gameRef\":\"/Lotus/PersonalPrimeBlueprint\",\"i18n\":{\"en\":{\"name\":\"Personal Prime Blueprint\"}}}]}";
         else if (uri.EndsWith("/filtered_items")) json = "{\"eqmt\":{\"Test\":{\"parts\":{\"Reward\":{\"ducats\":100}}}}}";
         else if (InvalidOrders) json = "{\"data\":\"invalid\"}";

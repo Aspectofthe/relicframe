@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Text.Json;
 
 namespace RelicFrame.Core;
@@ -17,6 +18,7 @@ public sealed class LiveMarket : IAsyncDisposable
     private readonly HashSet<string> unvaultedRewardNames;
     private readonly ConcurrentDictionary<string, OrderBook> books = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> refreshedThisRun = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> retryNotBefore = new(StringComparer.Ordinal);
     private IReadOnlyDictionary<string, string> names = new Dictionary<string, string>();
     private IReadOnlyDictionary<string, int> ducats = new Dictionary<string, int>();
     private IReadOnlyDictionary<string, string> idToSlug = new Dictionary<string, string>();
@@ -44,8 +46,8 @@ public sealed class LiveMarket : IAsyncDisposable
     private DateTimeOffset bootstrapStartedAt;
     public SellerBlacklist Blacklist { get; }
     public string Status => Volatile.Read(ref status);
-    public int ReadyBooks => books.Values.Count(b => b.FetchedAt.HasValue);
-    public int RefreshedBooks => refreshedThisRun.Count;
+    public int ReadyBooks => required.Count(slug => books.TryGetValue(slug, out var book) && book.FetchedAt.HasValue);
+    public int RefreshedBooks => required.Count(refreshedThisRun.ContainsKey);
     public int TotalBooks => required.Length;
     public int BootstrapAttempted => Volatile.Read(ref bootstrapAttempted);
     public int BootstrapTotal => Volatile.Read(ref bootstrapTotal);
@@ -230,7 +232,11 @@ public sealed class LiveMarket : IAsyncDisposable
             {
                 if (required.Length == 0) { await Task.Delay(TimeSpan.FromSeconds(30), ct); continue; }
                 // Smooth the full reconciliation across five minutes instead of producing a periodic API burst.
-                var slug = required.OrderBy(item => books.TryGetValue(item, out var book) ? book.FetchedAt ?? DateTimeOffset.MinValue : DateTimeOffset.MinValue).First();
+                var now = DateTimeOffset.UtcNow;
+                var slug = required.Where(item => !retryNotBefore.TryGetValue(item, out var until) || until <= now)
+                    .OrderBy(item => books.TryGetValue(item, out var book) ? book.FetchedAt ?? DateTimeOffset.MinValue : DateTimeOffset.MinValue)
+                    .FirstOrDefault();
+                if (slug is null) { await Task.Delay(TimeSpan.FromSeconds(5), ct); continue; }
                 if (await FetchBookAsync(slug, ct)) failures.TryRemove(slug, out _); else failures[slug] = "fetch failed";
                 Volatile.Write(ref status, failures.IsEmpty ? "ready" : $"partial: {failures.Count} failed books; older data retained where available");
                 await Task.Delay(TimeSpan.FromMinutes(5).TotalMilliseconds / required.Length < 50 ? TimeSpan.FromMilliseconds(50) : TimeSpan.FromMinutes(5) / required.Length, ct);
@@ -252,12 +258,14 @@ public sealed class LiveMarket : IAsyncDisposable
     }
     private async Task<bool> FetchBookAsync(string slug, CancellationToken ct, bool lowPriority = false)
     {
+        if (retryNotBefore.TryGetValue(slug, out var until) && until > DateTimeOffset.UtcNow) return false;
         try
         {
             using var doc = await http.GetJsonAsync("https://api.warframe.market/v2/orders/item/" + Uri.EscapeDataString(slug), ct, lowPriority: lowPriority);
             var rows = doc.RootElement.Get("data"); if (rows.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Missing order array");
             var book = books.GetOrAdd(slug, _ => new OrderBook()); book.Replace(rows);
             refreshedThisRun[slug] = 0;
+            retryNotBefore.TryRemove(slug, out _);
             var cache = Path.Combine(bookCachePath, slug + ".rfob");
             try
             {
@@ -272,7 +280,13 @@ public sealed class LiveMarket : IAsyncDisposable
             return true;
         }
         catch (Exception e) when (!ct.IsCancellationRequested && e is not OutOfMemoryException)
-        { Console.WriteLine($"[market] {slug}: {e.GetType().Name}; old book retained, if any"); return false; }
+        {
+            var cooldown = e is HttpRequestException { StatusCode: HttpStatusCode.NotFound } ? TimeSpan.FromMinutes(30) : TimeSpan.FromMinutes(1);
+            retryNotBefore[slug] = DateTimeOffset.UtcNow + cooldown;
+            var detail = e is HttpRequestException { StatusCode: { } code } ? $" HTTP {(int)code}" : "";
+            Console.WriteLine($"[market] {slug}: {e.GetType().Name}{detail}; retry in {(int)cooldown.TotalMinutes}m; old book retained, if any");
+            return false;
+        }
     }
     public OrderMatch Match(string name, string? tier, bool online, bool relic = false, string? excludedSellerSlug = null, IReadOnlySet<string>? excludedOrderIds = null)
     {
