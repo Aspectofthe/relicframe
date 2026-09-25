@@ -4,6 +4,12 @@ using System.Text.Json;
 
 namespace RelicFrame.Core;
 
+public sealed class MarketChallengeException(DateTimeOffset retryAt)
+    : Exception($"Warframe.market is presenting a Cloudflare challenge; API requests are paused until {retryAt:O}.")
+{
+    public DateTimeOffset RetryAt { get; } = retryAt;
+}
+
 // A single application-owned client shares its pacing across all WFM consumers.
 // All waits are cancellable; no Thread.Sleep and no lock held during Retry-After.
 public sealed class MarketHttp : IDisposable
@@ -15,8 +21,18 @@ public sealed class MarketHttp : IDisposable
     private readonly TimeSpan interval;
     private DateTimeOffset nextStart;
     private int priorityWork;
+    private long challengeUntilTicks;
     public double RequestsPerSecond { get; }
     public bool PriorityWorkActive => Volatile.Read(ref priorityWork) > 0;
+    public DateTimeOffset? ChallengePausedUntil
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref challengeUntilTicks);
+            var until = ticks == 0 ? (DateTimeOffset?)null : new DateTimeOffset(ticks, TimeSpan.Zero);
+            return until > DateTimeOffset.UtcNow ? until : null;
+        }
+    }
     public MarketHttp(HttpMessageHandler? handler = null, int concurrency = 4, double requestsPerSecond = 5)
     {
         if (concurrency < 1 || requestsPerSecond <= 0) throw new ArgumentOutOfRangeException(nameof(concurrency));
@@ -42,14 +58,31 @@ public sealed class MarketHttp : IDisposable
             slots.Release();
         }
     }
+    private void ThrowIfChallengePaused()
+    {
+        if (ChallengePausedUntil is { } until) throw new MarketChallengeException(until);
+    }
+    private void CheckForChallenge(HttpResponseMessage response)
+    {
+        if (response.StatusCode != HttpStatusCode.Forbidden
+            || !response.Headers.TryGetValues("Cf-Mitigated", out var values)
+            || !values.Any(value => value.Equals("challenge", StringComparison.OrdinalIgnoreCase))) return;
+        var until = DateTimeOffset.UtcNow.AddMinutes(5);
+        var previous = Interlocked.Exchange(ref challengeUntilTicks, until.UtcTicks);
+        if (previous <= DateTimeOffset.UtcNow.UtcTicks)
+            Console.WriteLine("[market] Cloudflare challenge (HTTP 403); all market API requests paused for 5 minutes; cached data retained");
+        throw new MarketChallengeException(until);
+    }
     public async Task<JsonDocument> GetJsonAsync(string url, CancellationToken ct, bool allowObjectLiteral = false, bool lowPriority = false)
     {
         for (var attempt = 0; attempt < 4; attempt++)
         {
+            ThrowIfChallengePaused();
             await AcquireSlotAsync(lowPriority, ct);
             TimeSpan? retry = null;
             try
             {
+                ThrowIfChallengePaused();
                 await schedule.WaitAsync(ct);
                 try
                 {
@@ -62,6 +95,7 @@ public sealed class MarketHttp : IDisposable
                 deadline.CancelAfter(TimeSpan.FromSeconds(30));
                 var requestToken = deadline.Token;
                 using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, requestToken);
+                CheckForChallenge(response);
                 if (response.StatusCode == HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)
                 {
                     if (attempt == 3) response.EnsureSuccessStatusCode();
@@ -98,9 +132,11 @@ public sealed class MarketHttp : IDisposable
         if (string.IsNullOrWhiteSpace(bearerToken)) throw new InvalidOperationException("Warframe.market session token is empty.");
         for (var attempt = 0; attempt < 4; attempt++)
         {
+            ThrowIfChallengePaused();
             await AcquireSlotAsync(lowPriority, ct); TimeSpan? retry = null;
             try
             {
+                ThrowIfChallengePaused();
                 await schedule.WaitAsync(ct);
                 try
                 {
@@ -116,6 +152,7 @@ public sealed class MarketHttp : IDisposable
                 if (body is not null) request.Content = new StringContent(JsonSerializer.Serialize(body, AccountJsonOptions), Encoding.UTF8, "application/json");
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromSeconds(30));
                 using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+                CheckForChallenge(response);
                 if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                     throw new UnauthorizedAccessException("Warframe.market rejected the local session token. Reconnect AlecaFrame to Warframe.market, then restart RelicFrame.");
                 if (response.StatusCode == HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)

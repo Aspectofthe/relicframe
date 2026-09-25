@@ -775,6 +775,18 @@ var retryHandler = new RetryHandler();
         using var result = await retryHttp.GetJsonAsync("https://example.invalid/retry", default);
         Assert(retryHandler.Calls == 3 && result.RootElement.Get("ok").Bool(), "429 and 503 retry successfully");
     }
+    var challengeHandler = new ChallengeHandler();
+    using (var challengeHttp = new MarketHttp(challengeHandler, 2, 10000))
+    {
+        var readsPaused = false;
+        try { using var _ = await challengeHttp.GetJsonAsync("https://example.invalid/challenge", default); }
+        catch (MarketChallengeException) { readsPaused = true; }
+        var writesPaused = false;
+        try { using var _ = await challengeHttp.SendJsonAsync(HttpMethod.Post, "https://example.invalid/order", null, "test-token", default); }
+        catch (MarketChallengeException) { writesPaused = true; }
+        Assert(readsPaused && writesPaused && challengeHandler.Calls == 1 && challengeHttp.ChallengePausedUntil > DateTimeOffset.UtcNow,
+            "a Cloudflare challenge pauses both reads and writes without hammering the market API");
+    }
     Assert(OrderMath.StableUnvaultedRewardPrice([
         new(2, 1, SellerStatus: "offline"), new(3, 1, SellerStatus: "offline"), new(4, 1, SellerStatus: "offline"),
         new(5, 1, SellerStatus: "offline"), new(14, 1, SellerStatus: "online")], 14) == 6,
@@ -1232,6 +1244,17 @@ sealed class RetryHandler : HttpMessageHandler
         Calls++; var response = new HttpResponseMessage(Calls == 1 ? HttpStatusCode.TooManyRequests : Calls == 2 ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK)
         { Content = new StringContent("{\"ok\":true}") };
         response.Headers.RetryAfter = new(TimeSpan.Zero); return Task.FromResult(response);
+    }
+}
+sealed class ChallengeHandler : HttpMessageHandler
+{
+    public int Calls;
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Interlocked.Increment(ref Calls);
+        var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        response.Headers.TryAddWithoutValidation("Cf-Mitigated", "challenge");
+        return Task.FromResult(response);
     }
 }
 sealed class MarketFeedHandler : HttpMessageHandler

@@ -212,6 +212,8 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             while (!ct.IsCancellationRequested)
             {
                 try { await UpdateAsync(force: false, ct); }
+                catch (MarketChallengeException)
+                { status = "Warframe.market Cloudflare challenge; listing sync paused and previous board retained"; }
                 catch (Exception e) when (!ct.IsCancellationRequested && e is not OutOfMemoryException)
                 { status = $"refresh failed ({e.GetType().Name}); previous board retained"; Console.WriteLine($"[personal-market] {e}"); }
                 var delay = market.ReadyBooks == 0 || market.IsBootstrapping || reconciliationPending || File.Exists(alecaPublicTokenPath)
@@ -254,6 +256,11 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
 
     private async Task UpdateLockedAsync(ITextChannel channel, bool force, CancellationToken ct)
     {
+        if (http.ChallengePausedUntil.HasValue)
+        {
+            status = "Warframe.market Cloudflare challenge; listing sync paused and previous board retained";
+            return;
+        }
         var rawInventory = PrimeInventory.Load(inventoryPath);
         var candidates = rawInventory.Select(item => new
         {
@@ -264,6 +271,11 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         {
             status = $"checking {candidates.Length} owned-item prices";
             await market.RefreshBooksAsync(candidates.Select(row => row.Name!), force ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5), ct, lowPriority: !force);
+        }
+        if (http.ChallengePausedUntil.HasValue)
+        {
+            status = "Warframe.market Cloudflare challenge; listing sync paused and previous board retained";
+            return;
         }
         var sourceActions = new List<string>();
         if (market.ReadyBooks > 0 && !market.IsBootstrapping)
@@ -331,6 +343,11 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             if (listingPlan.Sellable.Any(row => setDefinitions.Any(set => set.SetItemId == row.ItemId)))
                 await market.RefreshBooksAsync(listingPlan.Sellable.Where(row => setDefinitions.Any(set => set.SetItemId == row.ItemId))
                     .Select(row => row.ItemName), force ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5), ct, lowPriority: !force);
+        }
+        if (http.ChallengePausedUntil.HasValue)
+        {
+            status = "Warframe.market Cloudflare challenge; listing sync paused and previous board retained";
+            return;
         }
         var sellableInventory = marketUsable
             ? listingPlan.Sellable.Select(row => new PrimeInventoryEntry(row.ItemId, row.Quantity, row.ItemName)).ToArray()

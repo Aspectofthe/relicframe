@@ -11,14 +11,16 @@ public sealed class WfmWebSocket
     private readonly IReadOnlyDictionary<string, string> idToSlug;
     private readonly Func<string, bool> tracked;
     private readonly Action<string, JsonElement> apply;
+    private readonly Func<DateTimeOffset?>? pausedUntil;
     private int connected;
     private long lastEventTicks;
     public bool Connected => Volatile.Read(ref connected) != 0;
     public DateTimeOffset? LastEventAt => Interlocked.Read(ref lastEventTicks) is var ticks && ticks > 0 ? new(ticks, TimeSpan.Zero) : null;
     public WfmWebSocket(IReadOnlyDictionary<string, string> idToSlug, ISet<string> tracked, Action<string, JsonElement> apply)
         : this(idToSlug, tracked.Contains, apply) { }
-    public WfmWebSocket(IReadOnlyDictionary<string, string> idToSlug, Func<string, bool> tracked, Action<string, JsonElement> apply)
-    { this.idToSlug = idToSlug; this.tracked = tracked; this.apply = apply; }
+    public WfmWebSocket(IReadOnlyDictionary<string, string> idToSlug, Func<string, bool> tracked, Action<string, JsonElement> apply,
+        Func<DateTimeOffset?>? pausedUntil = null)
+    { this.idToSlug = idToSlug; this.tracked = tracked; this.apply = apply; this.pausedUntil = pausedUntil; }
 
     public bool Handle(string raw)
     {
@@ -38,6 +40,12 @@ public sealed class WfmWebSocket
         var waits = new[] { 1, 2, 5, 10, 30, 60 }; var attempt = 0;
         while (!ct.IsCancellationRequested)
         {
+            if (pausedUntil?.Invoke() is { } until && until > DateTimeOffset.UtcNow)
+            {
+                try { await Task.Delay(TimeSpan.FromSeconds(Math.Clamp((until - DateTimeOffset.UtcNow).TotalSeconds, 1, 30)), ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                continue;
+            }
             try
             {
                 using var socket = new ClientWebSocket(); socket.Options.AddSubProtocol(Protocol); socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);

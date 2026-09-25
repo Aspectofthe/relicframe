@@ -34,6 +34,7 @@ public sealed class ArcaneLiquidity
                 cache[quote.Name] = Parse(rows, DateTimeOffset.UtcNow);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (MarketChallengeException) { break; }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
                 Console.WriteLine($"[arcane-liquidity] {quote.Slug}: {error.GetType().Name}; activity unknown");

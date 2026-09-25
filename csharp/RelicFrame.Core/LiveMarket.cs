@@ -211,7 +211,8 @@ public sealed class LiveMarket : IAsyncDisposable
             }
             // Use the live book dictionary so Prime-set and Arcane books registered after
             // startup also receive incremental new-order events.
-            webSocket = new(idToSlug, slug => books.ContainsKey(slug), (slug, order) => books.GetOrAdd(slug, _ => new OrderBook()).ApplyCreated(order));
+            webSocket = new(idToSlug, slug => books.ContainsKey(slug), (slug, order) => books.GetOrAdd(slug, _ => new OrderBook()).ApplyCreated(order),
+                () => http.ChallengePausedUntil);
             var webSocketTask = enableWebSocket && idToSlug.Count > 0 ? webSocket.RunAsync(ct) : Task.CompletedTask;
             var failures = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
             var missing = required.Where(slug => !books.TryGetValue(slug, out var cached) || !cached.FetchedAt.HasValue).ToArray();
@@ -227,9 +228,16 @@ public sealed class LiveMarket : IAsyncDisposable
                     if (attempted == missing.Length || attempted % 10 == 0) Volatile.Write(ref status, BootstrapStatus(attempted, missing.Length));
                 });
             }
-            Volatile.Write(ref status, failures.IsEmpty ? "ready" : $"partial: {failures.Count} failed books; older data retained where available");
+            Volatile.Write(ref status, http.ChallengePausedUntil.HasValue ? "paused: Warframe.market Cloudflare challenge; cached books retained"
+                : failures.IsEmpty ? "ready" : $"partial: {failures.Count} failed books; older data retained where available");
             while (!ct.IsCancellationRequested)
             {
+                if (http.ChallengePausedUntil.HasValue)
+                {
+                    Volatile.Write(ref status, "paused: Warframe.market Cloudflare challenge; cached books retained");
+                    await Task.Delay(TimeSpan.FromSeconds(5), ct);
+                    continue;
+                }
                 if (required.Length == 0) { await Task.Delay(TimeSpan.FromSeconds(30), ct); continue; }
                 // Smooth the full reconciliation across five minutes instead of producing a periodic API burst.
                 var now = DateTimeOffset.UtcNow;
@@ -281,6 +289,11 @@ public sealed class LiveMarket : IAsyncDisposable
         }
         catch (Exception e) when (!ct.IsCancellationRequested && e is not OutOfMemoryException)
         {
+            if (e is MarketChallengeException challenge)
+            {
+                retryNotBefore[slug] = challenge.RetryAt;
+                return false;
+            }
             var cooldown = e is HttpRequestException { StatusCode: HttpStatusCode.NotFound } ? TimeSpan.FromMinutes(30) : TimeSpan.FromMinutes(1);
             retryNotBefore[slug] = DateTimeOffset.UtcNow + cooldown;
             var detail = e is HttpRequestException { StatusCode: { } code } ? $" HTTP {(int)code}" : "";

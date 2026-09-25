@@ -99,6 +99,8 @@ internal sealed class SyndicateManager : IAsyncDisposable
             {
                 try
                 {
+                    if (http.ChallengePausedUntil.HasValue)
+                    { status = "Warframe.market Cloudflare challenge; previous standing board retained"; await Task.Delay(TimeSpan.FromSeconds(30), ct); continue; }
                     if (market.IsBootstrapping || market.ReadyBooks == 0)
                     { await Task.Delay(TimeSpan.FromSeconds(30), ct); continue; }
                     var offers = await OffersAsync(ct);
@@ -127,6 +129,7 @@ internal sealed class SyndicateManager : IAsyncDisposable
                                 if (SyndicateProfit.Evaluate(offer, ask, cached.Sales, DateTimeOffset.UtcNow) is { } row) next.Add(row);
                         }
                         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                        catch (MarketChallengeException) { throw; }
                         catch (Exception e) when (e is not OutOfMemoryException)
                         { Console.WriteLine($"[syndicate-price] {item.Slug}: {e.GetType().Name}; excluded from refresh"); }
                         if ((index + 1) % 25 == 0) { rows = next.ToArray(); await RenderAsync(); }
@@ -136,6 +139,8 @@ internal sealed class SyndicateManager : IAsyncDisposable
                     await RenderAsync();
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (MarketChallengeException)
+                { status = "Warframe.market Cloudflare challenge; previous standing board retained"; }
                 catch (Exception e) when (e is not OutOfMemoryException)
                 {
                     status = "refresh failed; retry scheduled"; rows = [];
@@ -143,7 +148,7 @@ internal sealed class SyndicateManager : IAsyncDisposable
                     try { await RenderAsync(); } catch (Exception renderError) when (renderError is not OutOfMemoryException)
                     { Console.WriteLine($"[syndicate-render] {renderError.GetType().Name}"); }
                 }
-                await Task.Delay(TimeSpan.FromMinutes(15), ct);
+                await Task.Delay(http.ChallengePausedUntil.HasValue ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(15), ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }

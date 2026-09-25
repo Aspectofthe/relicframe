@@ -73,6 +73,8 @@ internal sealed class MaxedModManager : IAsyncDisposable
             {
                 try
                 {
+                    if (http.ChallengePausedUntil.HasValue)
+                    { status = "Warframe.market Cloudflare challenge; previous mod board retained"; await Task.Delay(TimeSpan.FromSeconds(30), ct); continue; }
                     if (market.IsBootstrapping || market.ReadyBooks == 0)
                     { status = "waiting for market"; await Task.Delay(TimeSpan.FromSeconds(30), ct); continue; }
                     var mods = market.RankTenMods;
@@ -105,6 +107,7 @@ internal sealed class MaxedModManager : IAsyncDisposable
                             if (result is not null) next.Add(result);
                         }
                         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                        catch (MarketChallengeException) { throw; }
                         catch (Exception e) when (e is not OutOfMemoryException)
                         { Console.WriteLine($"[maxed-mod] {mod.Slug}: {e.GetType().Name}; excluded from this refresh"); }
                         if ((index + 1) % 20 == 0) { rows = next.ToArray(); await RenderAsync(); }
@@ -115,6 +118,8 @@ internal sealed class MaxedModManager : IAsyncDisposable
                     await RenderAsync();
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (MarketChallengeException)
+                { status = "Warframe.market Cloudflare challenge; previous mod board retained"; }
                 catch (Exception e) when (e is not OutOfMemoryException)
                 {
                     status = "refresh failed; retry scheduled"; Console.WriteLine($"[maxed-mod] {e.GetType().Name}");
@@ -122,7 +127,7 @@ internal sealed class MaxedModManager : IAsyncDisposable
                     catch (Exception renderError) when (renderError is not OutOfMemoryException)
                     { Console.WriteLine($"[maxed-mod-render] {renderError.GetType().Name}"); }
                 }
-                await Task.Delay(TimeSpan.FromMinutes(15), ct);
+                await Task.Delay(http.ChallengePausedUntil.HasValue ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(15), ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
