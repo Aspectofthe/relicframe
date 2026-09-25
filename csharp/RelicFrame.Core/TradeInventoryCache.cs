@@ -46,6 +46,29 @@ public static class TradeInventoryCache
     public static int AdditionalConfirmedSaleDeduction(int stillInInventory, int notAlreadySuppressedByOrder)
         => Math.Min(Math.Max(0, stillInInventory), Math.Max(0, notAlreadySuppressedByOrder));
 
+    // The game log and AlecaFrame may report the same completed trade at
+    // different times. Match only the same item near the actual trade time.
+    public static int ConsumeMatchingTradeCredit(IDictionary<string, ObservedInventoryDecrease> credits,
+        string itemId, int quantity, DateTimeOffset tradeTime)
+    {
+        if (quantity <= 0 || !credits.TryGetValue(itemId, out var credit) ||
+            Math.Abs((credit.ObservedAt - tradeTime).TotalMinutes) > 5) return 0;
+        var matched = Math.Min(quantity, Math.Max(0, credit.Quantity));
+        if (matched >= credit.Quantity) credits.Remove(itemId);
+        else credits[itemId] = credit with { Quantity = credit.Quantity - matched };
+        return matched;
+    }
+
+    public static void RememberTradeCredit(IDictionary<string, ObservedInventoryDecrease> credits,
+        string itemId, int quantity, DateTimeOffset tradeTime)
+    {
+        if (quantity <= 0) return;
+        credits.TryGetValue(itemId, out var prior);
+        var total = prior is not null && Math.Abs((prior.ObservedAt - tradeTime).TotalMinutes) <= 5
+            ? prior.Quantity + quantity : quantity;
+        credits[itemId] = new(total, tradeTime);
+    }
+
     public static bool FreshSnapshotResolvesHold(MissingManagedOrderHold hold,
         int remainingStock, DateTimeOffset snapshotUpdatedAt)
         => snapshotUpdatedAt > hold.ObservedAt && remainingStock < hold.Quantity;

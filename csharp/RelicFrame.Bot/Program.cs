@@ -91,6 +91,10 @@ using var socket = new DiscordSocketClient(new DiscordSocketConfig
 await using var world = new WorldManager(socket, guildId, runtimePath, Environment.GetEnvironmentVariable("ARBITRATION_SCHEDULE_PATH") ?? "Untitled.txt");
 await using var panel = new RelicPanelManager(socket, market, relics, guildId, runtimePath);
 await using var personalMarket = new PersonalMarketManager(socket, market, http, guildId, runtimePath);
+await using var completedTrades = new EeLogTradeChatCollector(eeLogPath,
+    Path.Combine(runtimePath, "ee_completed_trade_cursor.json"), tradeChat,
+    personalMarket.RecordGameTradeAsync, collectOutgoing: false);
+completedTrades.Start(lifetime.Token);
 await using var primeSetCompletion = new PrimeSetCompletionManager(socket, market, http, personalMarket, guildId, runtimePath);
 await using var arcaneEconomy = new ArcaneEconomyManager(socket, market, http, guildId, runtimePath);
 await using var primeVendors = new PrimeVendorManager(socket, market, http, relics, guildId, runtimePath);
@@ -207,7 +211,7 @@ socket.SlashCommandExecuted += async command =>
             await command.RespondAsync($"C# preview is responding. Gateway latency: {socket.Latency} ms.\n" +
                 $"Overall loading: {OverallLoadingStatus()}.\n" +
                 $"RAM: {process.WorkingSet64 / 1048576d:F1} MiB. Commands: {(jobs.Reader.CanCount ? jobs.Reader.Count : 0)}/16 queued; {commandWorkerCount} workers. Market: {market.Status}; refreshed {market.RefreshedBooks}/{market.TotalBooks}, available {market.ReadyBooks}/{market.TotalBooks}; WebSocket {market.WebSocketStatus}.\n" +
-                $"Rivens: {rivens.Status}.\nOutgoing Trade Chat: {(eeLogEnabled ? eeTradeChat.Status : "EE.log collector disabled")}\n" +
+                $"Rivens: {rivens.Status}.\nOutgoing Trade Chat: {(eeLogEnabled ? eeTradeChat.Status : "EE.log collector disabled")}\nConfirmed trades: {completedTrades.Status}\n" +
                 $"Visible Trade Chat: {(screenOcrEnabled ? screenTradeChat.Status : "screen OCR disabled")}\nWorld: {world.Status}. Panel: {panel.Status}. Personal Market: {personalMarket.Status}. Arcane Economy: {arcaneEconomy.Status}. Prime vendors: {primeVendors.Status}. Maxed mods: {maxedMods.Status}. Syndicates: {syndicates.Status}.\nLast command error: {lastCommandError}.", ephemeral: true, allowedMentions: AllowedMentions.None);
             return;
         }

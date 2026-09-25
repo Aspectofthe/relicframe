@@ -47,6 +47,14 @@ public sealed class WfmAccountClient(MarketHttp http, string tokenPath)
         return Parse(document.RootElement.Get("data"));
     }
 
+    public async Task CloseOrderAsync(string orderId, int quantity, CancellationToken ct)
+    {
+        if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
+        using var _ = await http.SendJsonAsync(HttpMethod.Post,
+            "https://api.warframe.market/v2/order/" + Uri.EscapeDataString(orderId) + "/close",
+            new { quantity }, Token(), ct, lowPriority: false);
+    }
+
     private static WfmOwnOrder Parse(JsonElement row) => new(row.Get("id").Text(), row.Get("itemId").Text(), row.Get("type").Text(),
         (int)(row.Get("platinum").Number() ?? 0), (int)(row.Get("quantity").Number() ?? 0), row.Get("visible").Bool());
 }

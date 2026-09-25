@@ -24,6 +24,9 @@ internal sealed record PersonalMarketState
     public Dictionary<string, ObservedInventoryDecrease> RecentInventoryDecreases { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, ObservedInventoryDecrease> RecentOrderReductions { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, int> UnmatchedAlecaSaleQuantities { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ObservedInventoryDecrease> RecentGameSales { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ObservedInventoryDecrease> RecentAlecaSales { get; set; } = new(StringComparer.Ordinal);
+    public string[] ProcessedGameTradeIds { get; set; } = [];
     public DateTimeOffset? AlecaTradeWatermark { get; set; }
     public string[] ProcessedAlecaTradeIds { get; set; } = [];
     public PersonalMarketSale[] SaleHistory { get; set; } = [];
@@ -66,6 +69,8 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
     private IReadOnlyList<PrimeSetDefinition> setDefinitions = [];
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly SemaphoreSlim renderGate = new(1, 1);
+    private readonly SemaphoreSlim wake = new(0, 1);
+    private readonly FileSystemWatcher? inventoryWatcher;
     private PersonalMarketState state;
     private BoardSnapshot? boardSnapshot;
     private CancellationTokenSource? cancellation;
@@ -116,6 +121,9 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         state.RecentInventoryDecreases ??= new(StringComparer.Ordinal);
         state.RecentOrderReductions ??= new(StringComparer.Ordinal);
         state.UnmatchedAlecaSaleQuantities ??= new(StringComparer.Ordinal);
+        state.RecentGameSales ??= new(StringComparer.Ordinal);
+        state.RecentAlecaSales ??= new(StringComparer.Ordinal);
+        state.ProcessedGameTradeIds ??= [];
         state.ProcessedAlecaTradeIds ??= [];
         state.SaleHistory ??= []; state.LastActions ??= [];
         if (state.ReconciliationVersion < 2)
@@ -131,6 +139,16 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             Save();
         }
         state.AutoPublishEnabled ??= bool.TryParse(Environment.GetEnvironmentVariable("RELICFRAME_PERSONAL_AUTO_PUBLISH"), out var autoPublish) ? autoPublish : settings.AutoPublish;
+        var inventoryDirectory = Path.GetDirectoryName(inventoryPath);
+        if (!string.IsNullOrWhiteSpace(inventoryDirectory) && Directory.Exists(inventoryDirectory))
+        {
+            inventoryWatcher = new FileSystemWatcher(inventoryDirectory, Path.GetFileName(inventoryPath))
+            { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName };
+            inventoryWatcher.Changed += (_, _) => Wake();
+            inventoryWatcher.Created += (_, _) => Wake();
+            inventoryWatcher.Renamed += (_, _) => Wake();
+            inventoryWatcher.EnableRaisingEvents = true;
+        }
         bot.ButtonExecuted += DispatchButtonAsync;
     }
 
@@ -198,10 +216,17 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 { status = $"refresh failed ({e.GetType().Name}); previous board retained"; Console.WriteLine($"[personal-market] {e}"); }
                 var delay = market.ReadyBooks == 0 || market.IsBootstrapping || reconciliationPending || File.Exists(alecaPublicTokenPath)
                     ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5);
-                await Task.Delay(delay, ct);
+                await wake.WaitAsync(delay, ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+    }
+
+    private void Wake()
+    {
+        try { if (wake.CurrentCount == 0) wake.Release(); }
+        catch (ObjectDisposedException) { }
+        catch (SemaphoreFullException) { }
     }
 
     public async Task UpdateAsync(bool force, CancellationToken ct)
@@ -260,6 +285,8 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             orders = await account.OrdersAsync(ct);
             sourceActions.AddRange(ObserveManagedOrderChanges(orders, rawInventory));
         }
+        var ownOrderIds = orders?.Select(order => order.Id).ToHashSet(StringComparer.Ordinal)
+            ?? state.ManagedOrderIds.Values.ToHashSet(StringComparer.Ordinal);
         // Record vanished/reduced managed orders before reading completed trades,
         // so a sale reported in this same cycle can resolve their provisional hold.
         sourceActions.AddRange(await ObserveAlecaTradesAsync(rawInventory, ct));
@@ -274,7 +301,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         }).Where(row => row.Name is not null &&
             (row.Name.Contains(" Prime ", StringComparison.OrdinalIgnoreCase) || row.Name.EndsWith(" Prime", StringComparison.OrdinalIgnoreCase)))
           .Select(row => new PortfolioPosition(row.Name!, row.Item.Quantity,
-              market.RewardEstimate(row.Name!, ownSellerSlug).Price,
+              market.RewardEstimate(row.Name!, ownSellerSlug, ownOrderIds).Price,
               market.IsBookFresh(row.Name!, TimeSpan.FromMinutes(10)))).ToArray();
         var portfolio = PortfolioValuation.Calculate(portfolioPositions);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -316,11 +343,11 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         var assessed = candidates.Select(row =>
         {
             var bookFresh = market.IsBookFresh(row.Name!, TimeSpan.FromMinutes(10));
-            var estimate = bookFresh ? market.RewardEstimate(row.Name!, ownSellerSlug) : new RewardPriceEstimate(null, null, null, 0, false);
-            var visible = market.Match(row.Name!, null, false, excludedSellerSlug: ownSellerSlug).Entries;
+            var estimate = bookFresh ? market.RewardEstimate(row.Name!, ownSellerSlug, ownOrderIds) : new RewardPriceEstimate(null, null, null, 0, false);
+            var visible = market.Match(row.Name!, null, false, excludedSellerSlug: ownSellerSlug, excludedOrderIds: ownOrderIds).Entries;
             // Undercut the actionable in-game WTS competitor shown by the market UI,
             // not a cheaper merely-online/offline order or a blended valuation.
-            var listingReference = bookFresh ? market.PersonalMarketListingReference(row.Name!, ownSellerSlug) : null;
+            var listingReference = bookFresh ? market.PersonalMarketListingReference(row.Name!, ownSellerSlug, ownOrderIds) : null;
             var reference = listingReference.HasValue ? visible.MinBy(entry => Math.Abs(entry.Price - listingReference.Value)) : null;
             var best = listingReference.HasValue ? new OrderEntry(listingReference.Value, reference?.Quantity,
                 Seller: reference?.Seller ?? "market reference") : null;
@@ -340,7 +367,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         var emptyDescription = $"No mapped Prime inventory items currently have a non-outlier online ask of at least **{minimumPrice}p**. If this file is still empty, import your inventory JSON at `{inventoryPath}`.";
         var description = "";
         var mode = state.AutoPublishEnabled == true ? "AUTO LISTING ENABLED" : "AUTO LISTING PAUSED";
-        description += $"\n\n**{mode}.** Minimum {minimumPrice}p · undercut {undercut}p · stabilized online/recent-visible price · owner listing excluded: {(ownSellerSlug.Length > 0 ? "yes" : "no; set RELICFRAME_WFM_USER_SLUG")} · inventory file <t:{new DateTimeOffset(sourceAge).ToUnixTimeSeconds()}:R>.";
+        description += $"\n\n**{mode}.** Minimum {minimumPrice}p · undercut {undercut}p · stabilized online/recent-visible price · owner listing excluded: {(ownOrderIds.Count > 0 ? "authenticated order IDs" : ownSellerSlug.Length > 0 ? "seller slug" : "no; waiting for authenticated orders")} · inventory file <t:{new DateTimeOffset(sourceAge).ToUnixTimeSeconds()}:R>.";
         description += $"\n**Complete sets:** {(state.SellCompleteSets ? "sell sets and only surplus parts" : "sell parts separately")} · **sets one component type away:** {(state.ProtectIncompleteSets ? "reserve one completion's owned parts; sell only extras" : "sell their parts")}.";
         var belowFloor = assessed.Where(row => row.Quote is null && row.Best is not null && row.Best.Price < minimumPrice)
             .OrderByDescending(row => row.Best!.Price).ThenBy(row => row.Item.ItemName, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -510,6 +537,86 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         return PrimeInventory.SubtractPendingSales(raw, suppressed, ItemIdForInventory);
     }
 
+    public async Task RecordGameTradeAsync(EeLogCompletedTrade trade, CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            if (state.ProcessedGameTradeIds.Contains(trade.Id, StringComparer.Ordinal)) return;
+            var raw = PrimeInventory.Load(inventoryPath);
+            var owned = raw.Select(ItemIdForInventory).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            var actions = new List<string>();
+            var soldItems = new List<(string ItemId, int Quantity)>();
+            foreach (var given in trade.Given)
+            {
+                var itemId = market.ItemIdForName(given.Name);
+                if (itemId is null || (!owned.Contains(itemId) && !state.ManagedOrderIds.ContainsKey(itemId))) continue;
+                var alreadyFromAleca = TradeInventoryCache.ConsumeMatchingTradeCredit(
+                    state.RecentAlecaSales, itemId, given.Quantity, trade.ObservedAt);
+                var remaining = given.Quantity - alreadyFromAleca;
+                if (remaining <= 0) continue;
+                TradeInventoryCache.ConsumeMissingOrderHold(state.MissingManagedOrderHolds, itemId, remaining);
+                var stillInCache = TradeInventoryCache.QuantityStillInCache(itemId, remaining,
+                    trade.ObservedAt, state.RecentInventoryDecreases, setDefinitions);
+                var unmatchedOrder = TradeInventoryCache.QuantityStillInCache(itemId, remaining,
+                    trade.ObservedAt, state.RecentOrderReductions, []);
+                var deduction = TradeInventoryCache.AdditionalConfirmedSaleDeduction(stillInCache, unmatchedOrder);
+                AddPendingSale(itemId, deduction);
+                if (unmatchedOrder > 0)
+                    state.UnmatchedAlecaSaleQuantities[itemId] = state.UnmatchedAlecaSaleQuantities.GetValueOrDefault(itemId) + unmatchedOrder;
+                TradeInventoryCache.RememberTradeCredit(state.RecentGameSales, itemId, remaining, trade.ObservedAt);
+                soldItems.Add((itemId, remaining));
+                actions.Add($"• Warframe confirmed a trade of **{market.NameForItemId(itemId) ?? given.Name}** ×{remaining}; {deduction} stale unit(s) suppressed before AlecaFrame refreshes.");
+            }
+            state.ProcessedGameTradeIds = state.ProcessedGameTradeIds.Append(trade.Id).TakeLast(1000).ToArray();
+            if (actions.Count > 0) state.LastActions = actions.Take(8).ToArray();
+            Save();
+            if (soldItems.Any(item => state.ManagedOrderIds.ContainsKey(item.ItemId)))
+            {
+                try { await CloseConfirmedGameOrdersAsync(soldItems, ct); }
+                catch (Exception error) when (!ct.IsCancellationRequested && error is not OutOfMemoryException)
+                    { Console.WriteLine($"[personal-market] Immediate confirmed-trade order close failed ({error.GetType().Name}); normal reconciliation will retry."); }
+            }
+            if (actions.Count > 0) Wake();
+        }
+        finally { gate.Release(); }
+    }
+
+    private async Task CloseConfirmedGameOrdersAsync(IReadOnlyList<(string ItemId, int Quantity)> soldItems, CancellationToken ct)
+    {
+        var orders = (await account.OrdersAsync(ct)).ToDictionary(order => order.Id, StringComparer.Ordinal);
+        foreach (var sold in soldItems)
+        {
+            if (!state.ManagedOrderIds.TryGetValue(sold.ItemId, out var orderId)) continue;
+            if (!orders.TryGetValue(orderId, out var current))
+            {
+                state.ManagedOrderIds.Remove(sold.ItemId);
+                state.ManagedOrderQuantities.Remove(sold.ItemId);
+                state.ManagedOrderPrices.Remove(sold.ItemId);
+                state.UnmatchedAlecaSaleQuantities.Remove(sold.ItemId);
+                Save();
+                continue;
+            }
+            var previous = state.ManagedOrderQuantities.GetValueOrDefault(sold.ItemId);
+            if (previous <= 0) continue; // Unknown baseline: do not risk closing another copy.
+            var alreadyClosed = Math.Min(sold.Quantity, Math.Max(0, previous - current.Quantity));
+            var toClose = Math.Min(Math.Max(0, sold.Quantity - alreadyClosed), Math.Max(0, current.Quantity));
+            if (toClose > 0) await account.CloseOrderAsync(orderId, toClose, ct);
+            var remaining = current.Quantity - toClose;
+            if (remaining <= 0)
+            {
+                state.ManagedOrderIds.Remove(sold.ItemId);
+                state.ManagedOrderQuantities.Remove(sold.ItemId);
+                state.ManagedOrderPrices.Remove(sold.ItemId);
+            }
+            else state.ManagedOrderQuantities[sold.ItemId] = remaining;
+            var unmatched = Math.Max(0, state.UnmatchedAlecaSaleQuantities.GetValueOrDefault(sold.ItemId) - alreadyClosed - toClose);
+            if (unmatched == 0) state.UnmatchedAlecaSaleQuantities.Remove(sold.ItemId);
+            else state.UnmatchedAlecaSaleQuantities[sold.ItemId] = unmatched;
+            Save();
+        }
+    }
+
     private async Task<IReadOnlyList<string>> ObserveAlecaTradesAsync(IReadOnlyList<PrimeInventoryEntry> rawInventory, CancellationToken ct)
     {
         if (!File.Exists(alecaPublicTokenPath)) { alecaTradeStatus = "not connected"; return []; }
@@ -575,9 +682,12 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
             {
                 var releasedHold = TradeInventoryCache.ConsumeMissingOrderHold(
                     state.MissingManagedOrderHolds, sold.ItemId!, sold.Item.Quantity);
-                var stillInCache = TradeInventoryCache.QuantityStillInCache(sold.ItemId!, sold.Item.Quantity,
+                var alreadyFromGame = TradeInventoryCache.ConsumeMatchingTradeCredit(
+                    state.RecentGameSales, sold.ItemId!, sold.Item.Quantity, trade.Timestamp);
+                var remaining = sold.Item.Quantity - alreadyFromGame;
+                var stillInCache = TradeInventoryCache.QuantityStillInCache(sold.ItemId!, remaining,
                     trade.Timestamp, state.RecentInventoryDecreases, setDefinitions);
-                var unmatchedOrderQuantity = TradeInventoryCache.QuantityStillInCache(sold.ItemId!, sold.Item.Quantity,
+                var unmatchedOrderQuantity = TradeInventoryCache.QuantityStillInCache(sold.ItemId!, remaining,
                     trade.Timestamp, state.RecentOrderReductions, []);
                 var additionalDeduction = TradeInventoryCache.AdditionalConfirmedSaleDeduction(
                     stillInCache, unmatchedOrderQuantity);
@@ -585,6 +695,7 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
                 if (unmatchedOrderQuantity > 0)
                     state.UnmatchedAlecaSaleQuantities[sold.ItemId!] =
                         state.UnmatchedAlecaSaleQuantities.GetValueOrDefault(sold.ItemId!) + unmatchedOrderQuantity;
+                TradeInventoryCache.RememberTradeCredit(state.RecentAlecaSales, sold.ItemId!, remaining, trade.Timestamp);
                 var priceEach = mapped.Length == 1 ? Math.Max(0, trade.TotalPlatinum / sold.Item.Quantity) : 0;
                 state.SaleHistory = state.SaleHistory.Append(new(sold.ItemId!, sold.Name, "alecaframe:" + trade.Id[..12],
                     sold.Item.Quantity, priceEach, trade.Timestamp)).OrderByDescending(row => row.DetectedAt).Take(100).ToArray();
@@ -617,6 +728,8 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
         var now = DateTimeOffset.UtcNow;
         TradeInventoryCache.ForgetOldDecreases(state.RecentInventoryDecreases, now);
         TradeInventoryCache.ForgetOldDecreases(state.RecentOrderReductions, now);
+        TradeInventoryCache.ForgetOldDecreases(state.RecentGameSales, now);
+        TradeInventoryCache.ForgetOldDecreases(state.RecentAlecaSales, now);
         var current = rawInventory.ToDictionary(row => row.GameRef, row => row.Quantity, StringComparer.OrdinalIgnoreCase);
         var rawByItemId = rawInventory.Select(row => (Id: ItemIdForInventory(row), row.Quantity))
             .Where(row => row.Id is not null).GroupBy(row => row.Id!, StringComparer.Ordinal)
@@ -842,5 +955,5 @@ internal sealed class PersonalMarketManager : IAsyncDisposable
 
     private void Save() => Json.WriteAtomic(statePath, state);
     public async Task StopAsync() { if (cancellation is not null) await cancellation.CancelAsync(); if (worker is not null) await worker; status = "stopped"; }
-    public async ValueTask DisposeAsync() { bot.ButtonExecuted -= DispatchButtonAsync; await StopAsync(); cancellation?.Dispose(); gate.Dispose(); }
+    public async ValueTask DisposeAsync() { bot.ButtonExecuted -= DispatchButtonAsync; await StopAsync(); inventoryWatcher?.Dispose(); cancellation?.Dispose(); gate.Dispose(); wake.Dispose(); }
 }

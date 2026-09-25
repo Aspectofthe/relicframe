@@ -139,6 +139,8 @@ Personal Market is not required for the public relic, world-state, Arcane, Prime
 - Windows automatically checks AlecaFrame's local `lastData.dat` inventory when available.
 - `RELICFRAME_PRIME_INVENTORY_JSON` can point to a compatible inventory file on either platform.
 - Authenticated listing changes require the account owner's own Warframe.market token through `RELICFRAME_WFM_TOKEN` or `RELICFRAME_WFM_TOKEN_FILE`.
+- The bot locally tails Warframe's `EE.log` for itemized successful trades, suppresses stale sold stock, and closes the matching managed market-order quantity after checking its current size. It then wakes Personal Market to re-list only genuine remaining copies. Screen OCR remains for visible Trade Chat; it does not decide whether a trade succeeded. Set `RELICFRAME_EE_LOG_PATH` only if the default game-log location is wrong.
+- An inventory-file change also wakes Personal Market immediately. Market API calls still use the shared five-request-per-second budget, so a full initial price load or large reconciliation is not instantaneous.
 - Keep automatic publishing paused until the inventory, price floor, undercut, and owner-only Discord permissions have been checked.
 
 Never share Warframe.market tokens between users. Each installation keeps its private inventory, trade history, and authenticated listing operations local.

@@ -193,6 +193,28 @@ Assert(TradeInventoryCache.ConsumeMissingOrderHold(missingOrders, "set", 0) == 0
 Assert(TradeInventoryCache.AdditionalConfirmedSaleDeduction(1, 0) == 0
     && TradeInventoryCache.AdditionalConfirmedSaleDeduction(2, 1) == 1,
     "a completed trade does not deduct stock a prior managed-order reduction already suppressed");
+var gameCredits = new Dictionary<string, ObservedInventoryDecrease>();
+TradeInventoryCache.RememberTradeCredit(gameCredits, "citrine", 1, tradeTime);
+Assert(TradeInventoryCache.ConsumeMatchingTradeCredit(gameCredits, "citrine", 1, tradeTime.AddSeconds(20)) == 1
+    && gameCredits.Count == 0,
+    "AlecaFrame and the game log cannot suppress the same completed sale twice");
+TradeInventoryCache.RememberTradeCredit(gameCredits, "citrine", 1, tradeTime);
+Assert(TradeInventoryCache.ConsumeMatchingTradeCredit(gameCredits, "citrine", 1, tradeTime.AddHours(1)) == 0,
+    "unrelated later sales of the same item do not consume an old trade credit");
+var gameParser = new EeLogCompletedTradeParser();
+var confirm = "42.100 Script [Info]: Dialog.lua: Are you sure you want to accept this trade? You are offering:\rCitrine Prime Blueprint\rand will receive from Friend the following:\rPlatinum x 24, title= leftItem=/Menu/Confirm_Item_Ok";
+Assert(gameParser.Consume(confirm, tradeTime) is null && gameParser.Consume("42.300 Script [Info]: The trade was successful!", tradeTime.AddSeconds(2)) is
+    { PlatinumReceived: 24, Given: [{ Name: "Citrine Prime Blueprint", Quantity: 1 }] },
+    "only a successful itemized game-log trade confirms sold Prime stock");
+Assert(gameParser.Consume(confirm, tradeTime) is null && gameParser.Consume("42.300 Script [Info]: Trade Failed", tradeTime.AddSeconds(2)) is null,
+    "a failed or cancelled trade never removes inventory");
+Assert(gameParser.Consume("43.100 Script [Info]: Dialog.lua: Are you sure you want to accept this trade? You are offering:\rCitrine Prime Blueprint x 2\rand will receive from Friend the following:\rPlatinum x 48, title= leftItem=/Menu/Confirm_Item_Ok", tradeTime) is null
+    && gameParser.Consume("43.300 Script [Info]: The trade was successful!", tradeTime.AddSeconds(2)) is
+        { Given: [{ Name: "Citrine Prime Blueprint", Quantity: 2 }] },
+    "stacked items deduct their actual traded quantity");
+Assert(gameParser.Consume("44.100 Script [Info]: Dialog.lua: Are you sure you want to accept this trade? You are offering:\rPlatinum x 24\rand will receive from Friend the following:\rCitrine Prime Blueprint, title= leftItem=/Menu/Confirm_Item_Ok", tradeTime) is null
+    && gameParser.Consume("44.300 Script [Info]: The trade was successful!", tradeTime.AddSeconds(2)) is null,
+    "buying a Prime item does not suppress owned sale stock");
 var freshHold = new MissingManagedOrderHold("lost-order", 2, tradeTime);
 Assert(!TradeInventoryCache.FreshSnapshotResolvesHold(freshHold, 1, tradeTime)
     && !TradeInventoryCache.FreshSnapshotResolvesHold(freshHold, 2, tradeTime.AddMinutes(1))
@@ -665,6 +687,18 @@ try
         await collector.CollectOnceAsync();
         Assert(eeStore.Load().Length == 2, "EE.log cursor prevents duplicate imports");
     }
+    var confirmedTrades = new List<EeLogCompletedTrade>();
+    await using (var collector = new EeLogTradeChatCollector(eePath, Path.Combine(temp, "ee-trade-cursor.json"), eeStore,
+        (trade, _) => { confirmedTrades.Add(trade); return Task.CompletedTask; }, collectOutgoing: false))
+    {
+        await collector.CollectOnceAsync();
+        Assert(confirmedTrades.Count == 0, "new completed-trade tracking starts at the current log tail, not historical sales");
+        await File.AppendAllTextAsync(eePath, "4.000 Script [Info]: Dialog.lua: Are you sure you want to accept this trade? You are offering:\rCitrine Prime Blueprint\rand will receive from Friend the following:\rPlatinum x 24, title= leftItem=/Menu/Confirm_Item_Ok\n5.000 Script [Info]: The trade was successful!\n");
+        await collector.CollectOnceAsync();
+        await collector.CollectOnceAsync();
+        Assert(confirmedTrades is [{ PlatinumReceived: 24, Given: [{ Name: "Citrine Prime Blueprint", Quantity: 1 }] }],
+            "EE.log tailer emits one confirmed itemized sale and cursor prevents replay");
+    }
     var csv = Path.Combine(temp, "relics.csv");
     File.WriteAllText(csv, "relic_name,reward_name,rarity,vaulted\nLith Test,\"Reward, comma\",rare,\n");
     var relic = Relic.LoadCsv(csv)["Lith Test"];
@@ -918,6 +952,8 @@ Assert(!wrappedSlideOcr.Notes.Any(note => note.Contains("Faction multiplier", St
         var ownerExcluded = market.RewardEstimate("Personal Prime Blueprint", "good");
         Assert(market.PersonalMarketListingReference("Personal Prime Blueprint", "good") == 4,
             "Personal Market falls back to stabilized evidence when the owner is the only in-game seller");
+        Assert(market.PersonalMarketListingReference("Personal Prime Blueprint", excludedOrderIds: new HashSet<string> { "p5" }) == 4,
+            "authenticated own-order IDs prevent self-undercutting when the seller slug is missing");
         var stableQuote = PrimeInventory.Quote(new PrimeInventoryEntry("personal", 2), "Personal Prime Blueprint", ownerExcluded.Price, "stabilized market", 4, 1);
         Assert(ownerExcluded is { Price: 4, OnlineFloor: null, RecentVisibleMedian: 3.5 } && stableQuote is { Quantity: 2, DraftPrice: 4 },
             "Personal Market excludes the owner's listing and can quote from stable recent-visible evidence when nobody else is online");

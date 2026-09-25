@@ -17,6 +17,9 @@ public sealed class EeLogTradeChatCollector : IAsyncDisposable
     private readonly string logPath;
     private readonly string cursorPath;
     private readonly RivenTradeChat destination;
+    private readonly Func<EeLogCompletedTrade, CancellationToken, Task>? completedTrade;
+    private readonly bool collectOutgoing;
+    private EeLogCompletedTradeParser tradeParser = new();
     private readonly object gate = new();
     private CancellationTokenSource? stop;
     private Task? worker;
@@ -27,11 +30,18 @@ public sealed class EeLogTradeChatCollector : IAsyncDisposable
     private int unparsed;
     private string state = "stopped";
 
-    public EeLogTradeChatCollector(string logPath, string cursorPath, RivenTradeChat destination)
+    public EeLogTradeChatCollector(string logPath, string cursorPath, RivenTradeChat destination,
+        Func<EeLogCompletedTrade, CancellationToken, Task>? completedTrade = null, bool collectOutgoing = true)
     {
         this.logPath = Path.GetFullPath(logPath);
         this.cursorPath = Path.GetFullPath(cursorPath);
         this.destination = destination;
+        this.completedTrade = completedTrade;
+        this.collectOutgoing = collectOutgoing;
+        // A newly enabled trade watcher must not replay older trades whose stock
+        // is already reflected in AlecaFrame's snapshot.
+        if (completedTrade is not null && !File.Exists(this.cursorPath) && File.Exists(this.logPath))
+            offset = new FileInfo(this.logPath).Length;
         try
         {
             if (File.Exists(this.cursorPath))
@@ -79,7 +89,11 @@ public sealed class EeLogTradeChatCollector : IAsyncDisposable
         var info = new FileInfo(logPath);
         var currentHead = await FingerprintAsync(logPath, ct);
         if (info.Length < offset || (headFingerprint.Length > 0 && currentHead.Length > 0 && !headFingerprint.Equals(currentHead, StringComparison.Ordinal)))
+        {
             offset = 0;
+            tradeParser = new();
+            headFingerprint = currentHead;
+        }
         if (headFingerprint.Length == 0) headFingerprint = currentHead;
         if (info.Length <= offset)
         {
@@ -112,8 +126,20 @@ public sealed class EeLogTradeChatCollector : IAsyncDisposable
         var text = Encoding.UTF8.GetString(bytes, 0, complete);
         offset += complete;
         var messages = new List<string>();
-        foreach (var line in text.Replace("\r", "").Split('\n'))
+        foreach (var line in text.Split('\n'))
         {
+            if (completedTrade is not null && tradeParser.Consume(line, DateTimeOffset.UtcNow) is { } trade)
+            {
+                try { await completedTrade(trade, ct); }
+                catch
+                {
+                    // The cursor has not advanced yet. Replay the full chunk,
+                    // including its confirmation, after a transient failure.
+                    tradeParser = new();
+                    throw;
+                }
+            }
+            if (!collectOutgoing) continue;
             var match = OutgoingPublicMessage.Match(line);
             if (!match.Success) continue;
             var message = match.Groups["message"].Value.Trim();
@@ -142,6 +168,8 @@ public sealed class EeLogTradeChatCollector : IAsyncDisposable
                 try { await CollectOnceAsync(ct); }
                 catch (IOException error) { SetState("EE.log temporarily unavailable: " + error.GetType().Name); }
                 catch (UnauthorizedAccessException) { SetState("cannot read EE.log"); }
+                catch (Exception error) when (!ct.IsCancellationRequested && error is not OutOfMemoryException)
+                { SetState("EE.log trade check failed: " + error.GetType().Name); }
                 await Task.Delay(TimeSpan.FromSeconds(1), ct);
             }
         }

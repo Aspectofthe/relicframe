@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace RelicFrame.Core;
 
-public sealed record OrderEntry(double Price, double? Quantity, bool IsOutlier = false, string Seller = "", string SellerStatus = "", string SellerSlug = "", int? Rank = null);
+public sealed record OrderEntry(double Price, double? Quantity, bool IsOutlier = false, string Seller = "", string SellerStatus = "", string SellerSlug = "", int? Rank = null, string OrderId = "");
 public sealed record OrderMatch(IReadOnlyList<OrderEntry> Entries, bool SubtypeMatched)
 {
     public OrderEntry? Best => Entries.MinBy(e => e.Price);
@@ -22,8 +22,8 @@ public static class OrderMath
     public static bool Online(JsonElement row) => row.Get("user").Get("status").Text() is "online" or "ingame";
     public static List<OrderEntry> Entries(IEnumerable<JsonElement> rows) => rows.Select(r => new { P = UnitPrice(r), Q = r.Get("quantity").Number(),
             Seller = r.Get("user").Get("ingameName").Text(r.Get("user").Get("ingame_name").Text()), Status = r.Get("user").Get("status").Text(), Slug = r.Get("user").Get("slug").Text(),
-            Rank = r.Get("rank").Number() is { } rank ? (int?)rank : null })
-        .Where(r => r.P.HasValue && r.Q != 0).Select(r => new OrderEntry(r.P!.Value, r.Q, Seller: r.Seller, SellerStatus: r.Status, SellerSlug: r.Slug, Rank: r.Rank)).ToList();
+            Rank = r.Get("rank").Number() is { } rank ? (int?)rank : null, Id = r.Get("id").Text() })
+        .Where(r => r.P.HasValue && r.Q != 0).Select(r => new OrderEntry(r.P!.Value, r.Q, Seller: r.Seller, SellerStatus: r.Status, SellerSlug: r.Slug, Rank: r.Rank, OrderId: r.Id)).ToList();
     public static IReadOnlyList<OrderEntry> Outliers(IReadOnlyList<OrderEntry> rows)
     {
         if (rows.Count == 0) return [];
@@ -148,7 +148,7 @@ public sealed class OrderBook
         using var zipper = new ZLibStream(input, CompressionMode.Decompress);
         return JsonDocument.Parse(zipper);
     }
-    public OrderMatch Match(string? subtype, bool onlineOnly, ISet<string>? blacklist = null, string? excludedSellerSlug = null, string? sellerStatus = null, int? rank = null)
+    public OrderMatch Match(string? subtype, bool onlineOnly, ISet<string>? blacklist = null, string? excludedSellerSlug = null, string? sellerStatus = null, int? rank = null, IReadOnlySet<string>? excludedOrderIds = null)
     {
         using var doc = Read();
         return OrderMath.Matching(doc.RootElement.Rows().Where(r => r.Get("type").Text() == "sell"
@@ -156,6 +156,7 @@ public sealed class OrderBook
             && (!rank.HasValue || r.Get("rank").Number() is { } orderRank && (int)orderRank == rank.Value)
             && (string.IsNullOrWhiteSpace(sellerStatus) || r.Get("user").Get("status").Text().Equals(sellerStatus, StringComparison.OrdinalIgnoreCase))
             && !(blacklist?.Contains(r.Get("user").Get("ingameName").Text().Trim().ToLowerInvariant()) ?? false)
-            && (string.IsNullOrWhiteSpace(excludedSellerSlug) || !r.Get("user").Get("slug").Text().Equals(excludedSellerSlug, StringComparison.OrdinalIgnoreCase))), subtype);
+            && (string.IsNullOrWhiteSpace(excludedSellerSlug) || !r.Get("user").Get("slug").Text().Equals(excludedSellerSlug, StringComparison.OrdinalIgnoreCase))
+            && (excludedOrderIds is null || !excludedOrderIds.Contains(r.Get("id").Text()))), subtype);
     }
 }

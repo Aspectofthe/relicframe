@@ -274,10 +274,10 @@ public sealed class LiveMarket : IAsyncDisposable
         catch (Exception e) when (!ct.IsCancellationRequested && e is not OutOfMemoryException)
         { Console.WriteLine($"[market] {slug}: {e.GetType().Name}; old book retained, if any"); return false; }
     }
-    public OrderMatch Match(string name, string? tier, bool online, bool relic = false, string? excludedSellerSlug = null)
+    public OrderMatch Match(string name, string? tier, bool online, bool relic = false, string? excludedSellerSlug = null, IReadOnlySet<string>? excludedOrderIds = null)
     {
         var slug = Resolve(name, relic);
-        return slug is not null && books.TryGetValue(slug, out var book) && book.FetchedAt.HasValue ? book.Match(tier, online, Blacklist.Snapshot, excludedSellerSlug) : new([], false);
+        return slug is not null && books.TryGetValue(slug, out var book) && book.FetchedAt.HasValue ? book.Match(tier, online, Blacklist.Snapshot, excludedSellerSlug, excludedOrderIds: excludedOrderIds) : new([], false);
     }
     public IReadOnlyList<Relic> SourceRelics(string rewardName)
     {
@@ -286,29 +286,29 @@ public sealed class LiveMarket : IAsyncDisposable
             reward.RewardName.Equals(rewardName, StringComparison.OrdinalIgnoreCase)
             || (itemId is not null && ItemIdForName(reward.RewardName) == itemId))).ToArray();
     }
-    public OrderMatch MatchPersonalMarket(string name, string? excludedSellerSlug = null)
+    public OrderMatch MatchPersonalMarket(string name, string? excludedSellerSlug = null, IReadOnlySet<string>? excludedOrderIds = null)
     {
         // Match the default WFM sell view used for immediate whispers: sellers who are
         // currently in game. Merely-online orders can be cheaper but are not shown in that view.
         var slug = Resolve(name);
         return slug is not null && books.TryGetValue(slug, out var book) && book.FetchedAt.HasValue
-            ? book.Match(null, true, Blacklist.Snapshot, excludedSellerSlug, sellerStatus: "ingame")
+            ? book.Match(null, true, Blacklist.Snapshot, excludedSellerSlug, sellerStatus: "ingame", excludedOrderIds: excludedOrderIds)
             : new([], false);
     }
-    public double? PersonalMarketListingReference(string name, string? excludedSellerSlug = null)
+    public double? PersonalMarketListingReference(string name, string? excludedSellerSlug = null, IReadOnlySet<string>? excludedOrderIds = null)
     {
         // Match the actionable WTS view first. If nobody is currently in game,
         // fall back to broader online evidence and finally the stabilized book.
-        var ingame = MatchPersonalMarket(name, excludedSellerSlug).Best?.Price;
+        var ingame = MatchPersonalMarket(name, excludedSellerSlug, excludedOrderIds).Best?.Price;
         if (ingame.HasValue) return ingame;
-        var estimate = RewardEstimate(name, excludedSellerSlug);
+        var estimate = RewardEstimate(name, excludedSellerSlug, excludedOrderIds);
         return estimate.OnlineFloor ?? estimate.Price;
     }
-    public RewardPriceEstimate RewardEstimate(string name, string? excludedSellerSlug = null)
+    public RewardPriceEstimate RewardEstimate(string name, string? excludedSellerSlug = null, IReadOnlySet<string>? excludedOrderIds = null)
     {
-        var online = Match(name, null, true, excludedSellerSlug: excludedSellerSlug); var onlineFloor = online.Best?.Price;
+        var online = Match(name, null, true, excludedSellerSlug: excludedSellerSlug, excludedOrderIds: excludedOrderIds); var onlineFloor = online.Best?.Price;
         var key = name.Trim().ToLowerInvariant();
-        var visible = Match(name, null, false, excludedSellerSlug: excludedSellerSlug).Entries;
+        var visible = Match(name, null, false, excludedSellerSlug: excludedSellerSlug, excludedOrderIds: excludedOrderIds).Entries;
         var median = OrderMath.RecentVisibleLowerMedian(visible);
         if (!unvaultedRewardNames.Contains(key))
             return new(onlineFloor ?? median, onlineFloor, median, visible.Count, !onlineFloor.HasValue && median.HasValue);
