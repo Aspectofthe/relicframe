@@ -224,9 +224,13 @@ internal sealed class PrimeSetCompletionManager : IAsyncDisposable
             }
             var seller = order.Seller.Replace('\r', ' ').Replace('\n', ' ').Replace('`', '\'');
             var price = order.Price.ToString("0.##", CultureInfo.InvariantCulture);
-            var whisper = $"/w {seller} Hi! I want to buy: {itemName} ({relic.Refinement}) for {price} platinum. (warframe.market)";
+            var bulk = RelicBuyWhisper.Build(seller, relic.Name, relic.Refinement.ToString(), order.Price, order.Quantity, buyAll: true);
+            var single = RelicBuyWhisper.Build(seller, relic.Name, relic.Refinement.ToString(), order.Price, order.Quantity, buyAll: false);
+            var description = bulk.Quantity > 1
+                ? $"Full listing (×{bulk.Quantity}, {bulk.TotalPrice.ToString("0.##", CultureInfo.InvariantCulture)}p total):\n```text\n{bulk.Whisper}\n```\nOne relic:\n```text\n{single.Whisper}\n```"
+                : $"```text\n{single.Whisper}\n```";
             var embed = new EmbedBuilder().WithTitle($"💬 Buy {itemName}")
-                .WithDescription($"```text\n{whisper}\n```")
+                .WithDescription(description)
                 .WithColor(new Color(0x2ECC71)).AddField("Seller", $"`{seller}`", true)
                 .AddField("Price", $"{price}p each", true)
                 .AddField("Available", order.Quantity.HasValue ? $"×{order.Quantity:0.##}" : "Not reported", true);

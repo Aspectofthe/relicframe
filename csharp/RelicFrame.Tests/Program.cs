@@ -368,6 +368,16 @@ Assert(officialFixtureRelics.TryGetValue("Axi C12", out var officialFixtureRelic
     "official HTML importer scopes to relic rewards, decodes names, and classifies numeric chances");
 Assert(productionRelics.ContainsKey("Axi C12") && productionRelics.ContainsKey("Vanguard C1"),
     "refreshed catalog includes new Narin's Blade relics and retained historical Vanguard relics");
+var bulkWhisper = RelicBuyWhisper.Build("Seller", "Axi C12", "Intact", 3, 5, buyAll: true);
+Assert(bulkWhisper.Quantity == 5 && bulkWhisper.TotalPrice == 15
+    && bulkWhisper.Whisper.Contains("5 x Axi C12 Relic (Intact) for 15 platinum total (3 each)"),
+    "relic buy whisper offers the seller's full listed quantity and total price");
+var singleWhisper = RelicBuyWhisper.Build("Seller", "Axi C12", "Intact", 3, 5, buyAll: false);
+Assert(singleWhisper.Quantity == 1 && singleWhisper.TotalPrice == 3
+    && singleWhisper.Whisper.Contains("Axi C12 Relic (Intact) for 3 platinum"),
+    "relic buy whisper retains a one-relic alternative");
+Assert(RelicBuyWhisper.Build("Seller", "Axi C12", "Intact", 3, null, buyAll: true).Quantity == 1,
+    "unknown listing quantity never implies a bulk purchase");
 var officialMarker = Path.Combine(Path.GetTempPath(), "relicframe-official-marker-" + Guid.NewGuid().ToString("N"));
 try
 {

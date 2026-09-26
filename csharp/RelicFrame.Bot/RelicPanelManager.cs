@@ -549,10 +549,16 @@ internal sealed class RelicPanelManager : IAsyncDisposable
         }
         if (action == "buy")
         {
-            var order = market.Match(relicName, tier.ToString(), true, true).Best;
-            if (order is null || string.IsNullOrWhiteSpace(order.Seller)) { await interaction.FollowupAsync("That online listing disappeared. Refreshing the list will select the next current seller.", ephemeral: true); return; }
-            var seller = order.Seller.Replace('`', '\''); var whisper = $"/w {seller} Hi! I want to buy: {relicName} for {order.Price:0.##} platinum. (warframe.market)";
-            var embed = new EmbedBuilder().WithTitle($"💬 Buy {relicName}").WithDescription($"```text\n{whisper}\n```")
+            var match = market.Match(relicName, tier.ToString(), true, true);
+            var order = match.SubtypeMatched ? match.Best : null;
+            if (order is null || string.IsNullOrWhiteSpace(order.Seller)) { await interaction.FollowupAsync("No online listing remains for that exact relic refinement. Refresh the list or choose another refinement.", ephemeral: true); return; }
+            var seller = order.Seller.Replace('`', '\'');
+            var bulk = RelicBuyWhisper.Build(seller, relicName, tier.ToString(), order.Price, order.Quantity, buyAll: true);
+            var single = RelicBuyWhisper.Build(seller, relicName, tier.ToString(), order.Price, order.Quantity, buyAll: false);
+            var description = bulk.Quantity > 1
+                ? $"Full listing (×{bulk.Quantity}, {bulk.TotalPrice:0.##}p total):\n```text\n{bulk.Whisper}\n```\nOne relic:\n```text\n{single.Whisper}\n```"
+                : $"```text\n{single.Whisper}\n```";
+            var embed = new EmbedBuilder().WithTitle($"💬 Buy {relicName} · {tier}").WithDescription(description)
                 .WithColor(new Color(0x2ECC71)).AddField("Seller", $"`{seller}`", true).AddField("Price", $"{order.Price:0.##}p each", true)
                 .AddField("Available", order.Quantity.HasValue ? $"×{order.Quantity:0.##}" : "Not reported", true);
             if (!string.IsNullOrWhiteSpace(order.SellerSlug)) embed.AddField("Warframe Market", $"[Open seller profile](https://warframe.market/profile/{Uri.EscapeDataString(order.SellerSlug)})");
