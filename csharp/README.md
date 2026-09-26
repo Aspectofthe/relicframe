@@ -73,6 +73,9 @@ For direct screenshot posts, enable **Developer Portal → Bot → Privileged Ga
 | `RELICFRAME_DATA_DIR` | Public data and optionally private evidence directory; default `relicframe/data` |
 | `RELICFRAME_RUNTIME_DIR` | Writable C#-only cache/state directory; default `csharp/runtime` |
 | `RELICFRAME_WFM_WEBSOCKET` | Enabled by default for WFM's global new-order stream; set `false` to disable it. REST remains authoritative. |
+| `RELICFRAME_SHARED_HUB_LISTEN` | Optional private HTTP(S) listen origin for this bot's read-only cached catalog/order-book API. Requires `RELICFRAME_SHARED_HUB_KEY`; never expose directly to the public internet. |
+| `RELICFRAME_SHARED_HUB_SOURCE` | Optional URL of another RelicFrame bot's private cache; imports fresh catalog/order books and falls back to local/Warframe.market data. Requires the same key. |
+| `RELICFRAME_SHARED_HUB_KEY` | Private shared cache key, at least 24 characters; not a Warframe.market or Discord token. Keep outside Git. |
 | `RELICFRAME_EE_LOG` | Optional `true` watches the local Warframe log for your outgoing trade posts; both launchers default this to `true` |
 | `RELICFRAME_EE_LOG_PATH` | Optional path override; defaults to `%LOCALAPPDATA%\Warframe\EE.log` on Windows and auto-detects common Steam/Proton prefixes on Linux |
 | `RELICFRAME_TRADE_OCR` | Optional `true` reads visible incoming Trade Chat; both launchers default this to `true` |

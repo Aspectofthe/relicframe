@@ -14,6 +14,7 @@ public sealed record MarketCatalogItem(string Id, string Slug, string Name, IRea
 public sealed class LiveMarket : IAsyncDisposable
 {
     private readonly MarketHttp http;
+    private readonly SharedMarketCache? sharedCache;
     private readonly IReadOnlyDictionary<string, Relic> relics;
     private readonly HashSet<string> unvaultedRewardNames;
     private readonly ConcurrentDictionary<string, OrderBook> books = new(StringComparer.Ordinal);
@@ -43,6 +44,7 @@ public sealed class LiveMarket : IAsyncDisposable
     private string status = "stopped";
     private int bootstrapAttempted;
     private int bootstrapTotal;
+    private int sharedBooksLoaded;
     private DateTimeOffset bootstrapStartedAt;
     public SellerBlacklist Blacklist { get; }
     public string Status => Volatile.Read(ref status);
@@ -51,6 +53,8 @@ public sealed class LiveMarket : IAsyncDisposable
     public int TotalBooks => required.Length;
     public int BootstrapAttempted => Volatile.Read(ref bootstrapAttempted);
     public int BootstrapTotal => Volatile.Read(ref bootstrapTotal);
+    public int SharedBooksLoaded => Volatile.Read(ref sharedBooksLoaded);
+    public bool SharedSourceConfigured => sharedCache is not null;
     public TimeSpan? BootstrapRemaining
     {
         get
@@ -73,9 +77,9 @@ public sealed class LiveMarket : IAsyncDisposable
     }
     public bool IsBootstrapping => Status.StartsWith("refreshing", StringComparison.Ordinal);
     public string WebSocketStatus => !enableWebSocket ? "disabled" : webSocket?.Connected == true ? "connected" : "reconnecting/REST-only";
-    public LiveMarket(MarketHttp http, IReadOnlyDictionary<string, Relic> relics, string runtimePath, bool enableWebSocket = false)
+    public LiveMarket(MarketHttp http, IReadOnlyDictionary<string, Relic> relics, string runtimePath, bool enableWebSocket = false, SharedMarketCache? sharedCache = null)
     {
-        this.http = http; this.relics = relics; this.enableWebSocket = enableWebSocket; catalogPath = Path.Combine(runtimePath, "catalog.json");
+        this.http = http; this.relics = relics; this.enableWebSocket = enableWebSocket; this.sharedCache = sharedCache; catalogPath = Path.Combine(runtimePath, "catalog.json");
         bookCachePath = Path.Combine(runtimePath, "order-books");
         unvaultedRewardNames = relics.Values.Where(relic => relic.Vaulted is false).SelectMany(relic => relic.Rewards)
             .Select(reward => reward.RewardName.Trim().ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
@@ -113,6 +117,11 @@ public sealed class LiveMarket : IAsyncDisposable
             if (!force && File.Exists(catalogPath) && DateTime.UtcNow - File.GetLastWriteTimeUtc(catalogPath) < TimeSpan.FromDays(1))
             {
                 try { doc = JsonDocument.Parse(await File.ReadAllTextAsync(catalogPath, ct)); } catch (JsonException) { }
+            }
+            if (doc is null)
+            {
+                if (sharedCache is not null) doc = await sharedCache.CatalogAsync(ct);
+                if (doc is not null) Json.WriteAtomic(catalogPath, doc.RootElement);
             }
             if (doc is null)
             {
@@ -269,22 +278,29 @@ public sealed class LiveMarket : IAsyncDisposable
         if (retryNotBefore.TryGetValue(slug, out var until) && until > DateTimeOffset.UtcNow) return false;
         try
         {
+            if (sharedCache is not null && await sharedCache.BookAsync(slug, ct) is { } shared)
+            {
+                using (shared.Rows)
+                {
+                    var cachedBook = books.GetOrAdd(slug, _ => new OrderBook());
+                    if (cachedBook.FetchedAt is not { } localAt || shared.FetchedAt > localAt)
+                    {
+                        cachedBook.Replace(shared.Rows.RootElement, shared.FetchedAt);
+                        SaveBookCache(slug, cachedBook);
+                        Interlocked.Increment(ref sharedBooksLoaded);
+                        refreshedThisRun[slug] = 0;
+                        retryNotBefore.TryRemove(slug, out _);
+                        return true;
+                    }
+                    if (DateTimeOffset.UtcNow - localAt < TimeSpan.FromMinutes(5)) return true;
+                }
+            }
             using var doc = await http.GetJsonAsync("https://api.warframe.market/v2/orders/item/" + Uri.EscapeDataString(slug), ct, lowPriority: lowPriority);
             var rows = doc.RootElement.Get("data"); if (rows.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Missing order array");
             var book = books.GetOrAdd(slug, _ => new OrderBook()); book.Replace(rows);
             refreshedThisRun[slug] = 0;
             retryNotBefore.TryRemove(slug, out _);
-            var cache = Path.Combine(bookCachePath, slug + ".rfob");
-            try
-            {
-                if (!File.Exists(cache) || DateTime.UtcNow - File.GetLastWriteTimeUtc(cache) >= TimeSpan.FromMinutes(15)) book.SaveCache(cache);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                // The live response is already in memory. A transient Windows file lock
-                // must not turn a successful market refresh into a failed book.
-                Console.WriteLine($"[market-cache] {slug}: {error.GetType().Name}; live book retained, disk cache will retry");
-            }
+            SaveBookCache(slug, book);
             return true;
         }
         catch (Exception e) when (!ct.IsCancellationRequested && e is not OutOfMemoryException)
@@ -352,6 +368,36 @@ public sealed class LiveMarket : IAsyncDisposable
     public IReadOnlyList<MarketCatalogItem> RankTenMods => catalogById.Values
         .Where(item => item.MaxRank == 10 && item.Tags.Contains("mod", StringComparer.OrdinalIgnoreCase))
         .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+    public JsonDocument? ExportSharedCatalog()
+    {
+        try
+        {
+            if (!File.Exists(catalogPath) || DateTime.UtcNow - File.GetLastWriteTimeUtc(catalogPath) > TimeSpan.FromDays(1)) return null;
+            return JsonDocument.Parse(File.ReadAllText(catalogPath));
+        }
+        catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException) { return null; }
+    }
+    private void SaveBookCache(string slug, OrderBook book)
+    {
+        var cache = Path.Combine(bookCachePath, slug + ".rfob");
+        try
+        {
+            if (!File.Exists(cache) || DateTime.UtcNow - File.GetLastWriteTimeUtc(cache) >= TimeSpan.FromMinutes(15)) book.SaveCache(cache);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // The response is already in memory. A transient Windows file lock
+            // must not turn a successful refresh into a failed book.
+            Console.WriteLine($"[market-cache] {slug}: {error.GetType().Name}; live book retained, disk cache will retry");
+        }
+    }
+    public (DateTimeOffset FetchedAt, JsonDocument Rows)? ExportSharedBook(string slug)
+    {
+        if (slug.Length is < 1 or > 160 || slug.Any(ch => !char.IsAsciiLetterOrDigit(ch) && ch is not '_' and not '-')) return null;
+        if (!books.TryGetValue(slug, out var book) || book.FetchedAt is not { } at
+            || at > DateTimeOffset.UtcNow.AddMinutes(1) || DateTimeOffset.UtcNow - at > TimeSpan.FromMinutes(15)) return null;
+        return (at, book.Read());
+    }
     public bool RegisterBook(string name)
     {
         var slug = Resolve(name); if (slug is null) return false;

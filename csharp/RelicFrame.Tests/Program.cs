@@ -642,6 +642,32 @@ using (var doc = JsonDocument.Parse("[{\"id\":\"1\",\"platinum\":3.125,\"note\":
     })));
     using var concurrentRead = concurrent.Read();
     Assert(concurrentRead.RootElement.GetArrayLength() == 40, "concurrent new-order events do not overwrite one another");
+    var sharedAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+    var sharedHandler = new SharedMarketHandler(sharedAt);
+    using (var shared = new SharedMarketCache("http://127.0.0.1:8187", new string('k', 32), sharedHandler))
+    {
+        using var catalog = await shared.CatalogAsync(default);
+        Assert(catalog?.RootElement.Get("data").GetArrayLength() == 1, "shared cache returns an authenticated catalog snapshot");
+        var sharedBook = await shared.BookAsync("example_prime_set", default);
+        Assert(sharedBook.HasValue && sharedBook.Value.Rows.RootElement.GetArrayLength() == 1 && sharedHandler.Authenticated,
+            "shared cache returns only allowlisted book snapshots with the key");
+        using (sharedBook!.Value.Rows)
+        {
+            var imported = new OrderBook(); imported.Replace(sharedBook.Value.Rows.RootElement, sharedBook.Value.FetchedAt);
+            Assert(imported.FetchedAt == sharedAt, "shared book preserves the source timestamp instead of pretending to be newly fetched");
+        }
+        Assert(await shared.BookAsync("../account/token", default) is null && sharedHandler.BookCalls == 1,
+            "shared client rejects arbitrary paths and never proxies account data");
+        sharedHandler.Stale = true;
+        Assert(await shared.BookAsync("example_prime_set", default) is null, "stale shared books are rejected for direct-API fallback");
+    }
+    var offlineHub = new OfflineSharedMarketHandler();
+    using (var shared = new SharedMarketCache("http://127.0.0.1:8187", new string('k', 32), offlineHub))
+    {
+        Assert(await shared.BookAsync("example_prime_set", default) is null
+            && await shared.BookAsync("another_prime_set", default) is null && offlineHub.Calls == 1,
+            "an unavailable hub enters cooldown instead of delaying every book in bootstrap");
+    }
 }
 var handler = new FakeHandler();
 using (var http = new MarketHttp(handler, 2, 200))
@@ -976,6 +1002,19 @@ Assert(!wrappedSlideOcr.Notes.Any(note => note.Contains("Faction multiplier", St
         Assert(market.Snapshot(Refinement.Radiant).Prices["reward"] == 1, "removing seller exclusion restores retained order evidence");
         await market.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
     }
+    var hubFeed = new MarketFeedHandler();
+    using (var source = new SharedMarketCache("http://127.0.0.1:8187", new string('k', 32), new SharedMarketHandler(DateTimeOffset.UtcNow.AddMinutes(-2))))
+    using (var direct = new MarketHttp(hubFeed, 2, 10000))
+    {
+        await using var importedMarket = new LiveMarket(direct, new Dictionary<string, Relic>(), Path.Combine(temp, "imported-market"), sharedCache: source);
+        await importedMarket.StartAsync(true, default);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (importedMarket.Status != "ready") await Task.Delay(10, timeout.Token);
+        Assert(await importedMarket.EnsureBookAsync("Example Prime Set", default) && importedMarket.SharedBooksLoaded == 1
+            && hubFeed.OrderCalls == 0 && importedMarket.Match("Example Prime Set", null, false).Best?.Price == 10,
+            "client bot uses a fresh shared book without a duplicate Warframe.market order request");
+        await importedMarket.StopAsync();
+    }
     var invalidHandler = new MarketFeedHandler { InvalidOrders = true };
     using (var invalidHttp = new MarketHttp(invalidHandler, 2, 10000))
     {
@@ -1271,6 +1310,30 @@ sealed class MarketFeedHandler : HttpMessageHandler
         else if (uri.EndsWith("/personal_prime_blueprint")) json = "{\"data\":[{\"id\":\"p1\",\"type\":\"sell\",\"platinum\":2,\"quantity\":1,\"user\":{\"ingameName\":\"Recent1\",\"status\":\"offline\"}},{\"id\":\"p2\",\"type\":\"sell\",\"platinum\":3,\"quantity\":1,\"user\":{\"ingameName\":\"Recent2\",\"status\":\"offline\"}},{\"id\":\"p3\",\"type\":\"sell\",\"platinum\":4,\"quantity\":1,\"user\":{\"ingameName\":\"Recent3\",\"status\":\"offline\"}},{\"id\":\"p4\",\"type\":\"sell\",\"platinum\":5,\"quantity\":1,\"user\":{\"ingameName\":\"Recent4\",\"status\":\"offline\"}},{\"id\":\"p5\",\"type\":\"sell\",\"platinum\":14,\"quantity\":1,\"user\":{\"ingameName\":\"GoodSeller\",\"status\":\"ingame\",\"slug\":\"good\"}}]}";
         else json = "{\"data\":[{\"id\":\"1\",\"type\":\"sell\",\"platinum\":1,\"quantity\":5,\"subtype\":\"radiant\",\"user\":{\"ingameName\":\"Badseller\",\"status\":\"online\"}},{\"id\":\"2\",\"type\":\"sell\",\"platinum\":20,\"quantity\":5,\"subtype\":\"radiant\",\"user\":{\"ingameName\":\"GoodSeller\",\"status\":\"ingame\"}}]}";
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });
+    }
+}
+sealed class SharedMarketHandler(DateTimeOffset fetchedAt) : HttpMessageHandler
+{
+    public bool Authenticated;
+    public bool Stale;
+    public int BookCalls;
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Authenticated |= request.Headers.TryGetValues("X-RelicFrame-Key", out var values) && values.Single() == new string('k', 32);
+        var path = request.RequestUri!.AbsolutePath;
+        if (path.StartsWith("/v1/books/", StringComparison.Ordinal)) BookCalls++;
+        var body = path == "/v1/catalog" ? "{\"data\":[{\"slug\":\"example_prime_set\",\"i18n\":{\"en\":{\"name\":\"Example Prime Set\"}}}]}"
+            : JsonSerializer.Serialize(new { fetchedAt = (Stale ? DateTimeOffset.UtcNow.AddHours(-1) : fetchedAt).ToString("O"), rows = new[] { new { id = "sample", type = "sell", platinum = 10 } } });
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+    }
+}
+sealed class OfflineSharedMarketHandler : HttpMessageHandler
+{
+    public int Calls;
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Interlocked.Increment(ref Calls);
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
     }
 }
 sealed class PrimeSetFeedHandler : HttpMessageHandler

@@ -1,6 +1,6 @@
 # RelicFrame bot setup
 
-RelicFrame currently runs directly on the computer that launches it. An Oracle server, shared price service, reverse proxy, or public IP is **not required**. Remote/shared caching may be added later as an optional deployment mode.
+RelicFrame runs directly on the computer that launches it. A shared price hub is optional; no Oracle server, reverse proxy, or public IP is required for a normal installation.
 
 ## Fresh-install checklist
 
@@ -92,6 +92,28 @@ The Linux launcher applies the same clean-checkout, fast-forward-only update che
 The launcher prompts for the same token and server ID. It stores them in owner-only mode-`600` files inside the ignored `csharp/runtime` directory. Use `--forget-credentials` to replace them or `--no-build` after a successful Release build.
 
 Set optional environment variables in the same terminal **before** starting the launcher. They are not stored in the downloaded ZIP and a variable set in one terminal is not automatically available in a new terminal.
+
+### Optional shared market cache between bots
+
+One RelicFrame bot can serve the public Warframe.market catalog and order books it **already has in memory**. This is a read-only cache, not an on-demand Warframe.market proxy. It does not expose inventory, completed trades, Discord data, AlecaFrame data, or Warframe.market account credentials. A second bot imports a book only when its original fetch time is at most 15 minutes old; otherwise it uses its own local cache or normal upstream fetch. This reduces duplicate order-book fetches while the hub is available, but it does not sync Riven, Arcane, or other managers that make separate API calls. It does not make Warframe.market independent or increase its upstream rate allowance.
+
+Set these environment variables on the **hub PC** before starting its bot:
+
+| Variable | Value |
+| --- | --- |
+| `RELICFRAME_SHARED_HUB_LISTEN` | The private interface and port to listen on, e.g. `http://192.168.1.212:8187` for that PC's current LAN address; omit to disable serving. |
+| `RELICFRAME_SHARED_HUB_KEY` | A random secret of at least 24 characters, kept outside Git and shared only with your other bot installation. |
+
+Set these on the **client PC** before starting its bot:
+
+| Variable | Value |
+| --- | --- |
+| `RELICFRAME_SHARED_HUB_SOURCE` | The hub URL above, reachable over the same private LAN or a private VPN. |
+| `RELICFRAME_SHARED_HUB_KEY` | The same secret as on the hub PC. |
+
+For a local-only test, use `http://127.0.0.1:8187` as the listen and source URL on the same PC. On separate PCs, use the hub PC's **current private LAN address**, not `127.0.0.1`. Windows Firewall may ask to permit the listening port on **Private** networks. Never port-forward the hub to the public internet or send its key over ordinary public HTTP; for remote access use a private encrypted tunnel/VPN or HTTPS. `/rf-status` reports whether the hub is serving and how many shared books a client imported. Restart both bots after changing environment variables. If the hub is unavailable or a book is stale, the client falls back automatically to its own cache and direct Warframe.market fetches. Personal inventory and trades stay on each user's PC.
+
+Warframe.market's [public API rules](https://docs.warframe.market/docs/rules/overview/) currently describe a general limit of 3 requests per second and warn against public data mirrors and traffic-offloading services. Keep this hub private to your installations, use its existing cache, and do not assume it grants extra upstream quota. The bot's existing direct-API pacing is unchanged by this option.
 
 ### Syndicate standing converter
 

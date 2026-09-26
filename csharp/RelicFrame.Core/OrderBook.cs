@@ -121,11 +121,11 @@ public sealed class OrderBook
         using (var zipper = new ZLibStream(output, CompressionLevel.Fastest, true)) zipper.Write(bytes);
         return output.ToArray();
     }
-    public void Replace(JsonElement rows)
+    public void Replace(JsonElement rows, DateTimeOffset? fetchedAt = null)
     {
         if (rows.ValueKind != JsonValueKind.Array) throw new InvalidDataException("Order book must be an array");
         var packed = Pack(JsonSerializer.SerializeToUtf8Bytes(rows));
-        lock (updateGate) Interlocked.Exchange(ref state, new(packed, DateTimeOffset.UtcNow));
+        lock (updateGate) Interlocked.Exchange(ref state, new(packed, fetchedAt ?? DateTimeOffset.UtcNow));
     }
     public void ApplyCreated(JsonElement order)
     {

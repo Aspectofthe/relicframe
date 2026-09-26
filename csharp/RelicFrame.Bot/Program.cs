@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using Discord;
 using Discord.WebSocket;
 using RelicFrame.Core;
+using RelicFrame.Bot;
 
 if (args is ["--profile-ocr", var ocrImage])
 {
@@ -71,8 +72,15 @@ var relics = Relic.LoadCsv(Path.Combine(dataPath, "relics_from_official_data.csv
 using var lifetime = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; lifetime.Cancel(); };
 using var http = new MarketHttp();
+var sharedKey = Environment.GetEnvironmentVariable("RELICFRAME_SHARED_HUB_KEY");
+var sharedSource = Environment.GetEnvironmentVariable("RELICFRAME_SHARED_HUB_SOURCE");
+using var sharedCache = !string.IsNullOrWhiteSpace(sharedSource)
+    ? new SharedMarketCache(sharedSource, sharedKey ?? "") : null;
 await using var market = new LiveMarket(http, relics, runtimePath,
-    !string.Equals(Environment.GetEnvironmentVariable("RELICFRAME_WFM_WEBSOCKET"), "false", StringComparison.OrdinalIgnoreCase));
+    !string.Equals(Environment.GetEnvironmentVariable("RELICFRAME_WFM_WEBSOCKET"), "false", StringComparison.OrdinalIgnoreCase), sharedCache);
+var sharedListen = Environment.GetEnvironmentVariable("RELICFRAME_SHARED_HUB_LISTEN");
+await using var sharedHub = !string.IsNullOrWhiteSpace(sharedListen)
+    ? await SharedMarketHub.StartAsync(market, sharedListen, sharedKey ?? "", lifetime.Token) : null;
 await using var rivens = new RivenMarket(http, runtimePath, Path.Combine(dataPath, "rivens", "roll_rules.json"));
 var tradeChat = new RivenTradeChat(Path.Combine(runtimePath, "riven_trade_chat.jsonl"), () => rivens.WeaponNames);
 var eeLogEnabled = string.Equals(Environment.GetEnvironmentVariable("RELICFRAME_EE_LOG"), "true", StringComparison.OrdinalIgnoreCase);
@@ -210,7 +218,7 @@ socket.SlashCommandExecuted += async command =>
             using var process = Process.GetCurrentProcess();
             await command.RespondAsync($"C# preview is responding. Gateway latency: {socket.Latency} ms.\n" +
                 $"Overall loading: {OverallLoadingStatus()}.\n" +
-                $"RAM: {process.WorkingSet64 / 1048576d:F1} MiB. Commands: {(jobs.Reader.CanCount ? jobs.Reader.Count : 0)}/16 queued; {commandWorkerCount} workers. Market: {market.Status}; refreshed {market.RefreshedBooks}/{market.TotalBooks}, available {market.ReadyBooks}/{market.TotalBooks}; WebSocket {market.WebSocketStatus}.\n" +
+                $"RAM: {process.WorkingSet64 / 1048576d:F1} MiB. Commands: {(jobs.Reader.CanCount ? jobs.Reader.Count : 0)}/16 queued; {commandWorkerCount} workers. Market: {market.Status}; refreshed {market.RefreshedBooks}/{market.TotalBooks}, available {market.ReadyBooks}/{market.TotalBooks}; WebSocket {market.WebSocketStatus}; shared hub {(sharedHub is null ? "off" : "serving")}; shared source {(sharedCache is null ? "off" : $"{sharedCache.Status} ({market.SharedBooksLoaded} books imported)")}.\n" +
                 $"Rivens: {rivens.Status}.\nOutgoing Trade Chat: {(eeLogEnabled ? eeTradeChat.Status : "EE.log collector disabled")}\nConfirmed trades: {completedTrades.Status}\n" +
                 $"Visible Trade Chat: {(screenOcrEnabled ? screenTradeChat.Status : "screen OCR disabled")}\nWorld: {world.Status}. Panel: {panel.Status}. Personal Market: {personalMarket.Status}. Arcane Economy: {arcaneEconomy.Status}. Prime vendors: {primeVendors.Status}. Maxed mods: {maxedMods.Status}. Syndicates: {syndicates.Status}.\nLast command error: {lastCommandError}.", ephemeral: true, allowedMentions: AllowedMentions.None);
             return;
