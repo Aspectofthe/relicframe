@@ -34,6 +34,17 @@ The result must begin with `10.`. The checked-in Windows launcher will use `.too
 
 For a Git checkout, use `git clone --branch csharp-rewrite https://github.com/Aspectofthe/relicframe.git`. For a ZIP, choose the `csharp-rewrite` branch on the repository page before **Code → Download ZIP**, extract it, and open a terminal in the extracted repository root. The repository must contain `csharp/run-bot.cmd` (or `csharp/run-bot.sh`) and `relicframe/data/relics_from_official_data.csv`.
 
+### Refresh official relic drop tables
+
+The bot loads its relic reward list from `relicframe/data/relics_from_official_data.csv` at startup. To pull the current [Digital Extremes PC drop tables](https://warframe-web-assets.nyc3.cdn.digitaloceanspaces.com/uploads/cms/hnfvc0o3jnfvc873njb03enrf56.html), run these commands from the repository root using the same .NET SDK as the bot (or replace `dotnet` with `.\.tools\dotnet\dotnet.exe` if the SDK is bundled there):
+
+```powershell
+dotnet run --project csharp/RelicFrame.Bot -c Release -- --update-official-drops --check
+dotnet run --project csharp/RelicFrame.Bot -c Release -- --update-official-drops
+```
+
+The first command reports the published update date and relic counts without changing files. The second makes one request to DE, validates the six-slot relic data, and replaces the CSV only after validation. It preserves already catalogued relics omitted from the current export (including Vanguard) and keeps existing vault flags; new relics get unknown vault status rather than an invented value. Restart the bot afterward. This is separate from Warframe.market's rate-limited price API. The DE page supplies drops, not the Warframe.market item catalog or the list of Riven-eligible weapons, so new Riven weapons are refreshed by the market catalog path instead.
+
 ## 2. Create the Discord bot
 
 1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and select **New Application**.

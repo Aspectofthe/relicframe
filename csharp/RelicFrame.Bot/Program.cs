@@ -7,6 +7,12 @@ using Discord.WebSocket;
 using RelicFrame.Core;
 using RelicFrame.Bot;
 
+if (args.Contains("--update-official-drops"))
+{
+    var target = Path.GetFullPath(Path.Combine(Environment.GetEnvironmentVariable("RELICFRAME_DATA_DIR") ?? "relicframe/data", "relics_from_official_data.csv"));
+    Console.WriteLine(await OfficialDropTables.RefreshAsync(target, args.Contains("--check")));
+    return;
+}
 if (args is ["--profile-ocr", var ocrImage])
 {
     var profile = TradeChatScreenCollector.ProfileFile(ocrImage);
@@ -59,6 +65,7 @@ if (!args.Contains("--test-bot"))
     Console.WriteLine("--profile-ocr <image>: local OCR confidence/candidate diagnostic; does not print or retain recognized text.");
     Console.WriteLine("--profile-riven-ocr <image>: local multi-pass Riven OCR diagnostic; prints structured fields and retains nothing.");
     Console.WriteLine("--profile-inventory <json-or-lastData.dat>: local inventory parser diagnostic; prints counts only.");
+    Console.WriteLine("--update-official-drops [--check]: refresh relic rewards from Digital Extremes' official PC drop tables; no Discord login.");
     Console.WriteLine("--test-bot: requires RELICFRAME_CSHARP_TOKEN and RELICFRAME_TEST_GUILD_ID.");
     Console.WriteLine("Only adds rf-* commands to the selected test guild; no global command replacement.");
     return;

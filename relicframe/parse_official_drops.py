@@ -1,9 +1,9 @@
 """
 parse_official_drops.py
-Parses the official Digital Extremes drop-table export (the "Last Update:
-<date>" .txt file from warframe.com/droptables) into this tool's CSV
-format. This is the PRIMARY data source - DE's own numbers, not a
-third-party copy of them.
+Parses Digital Extremes' official drop-table export into this tool's CSV
+format. parse_file handles the text export; parse_html handles the current
+PC HTML page used by update_official_drops.py. This is the PRIMARY data
+source - DE's own numbers, not a third-party copy of them.
 
 Why percentages, not DE's printed word: DE's own text only uses two rarity
 words ("Uncommon" and "Rare") to describe what this tool treats as three
@@ -24,6 +24,7 @@ Output:
 """
 
 import csv
+import html
 import re
 import sys
 
@@ -38,6 +39,42 @@ REWARD_RE = re.compile(r"^(.+?)\t(?:Very Common|Common|Uncommon|Rare|Ultra Rare|
 # chances to count as a match - DE rounds to 2 decimals, our table does
 # too, so this only needs to absorb float noise.
 TOLERANCE = 0.05
+
+
+def parse_html(content: str) -> dict[str, dict[str, list[tuple[str, float]]]]:
+    """Read relic reward rows from DE's PC drop-table HTML export.
+
+    Only the Relics section is considered: mission tables also contain relic
+    names, but those are acquisition drops, not a relic's six rewards.
+    """
+    section = re.search(
+        r'<h3\s+id=["\']relicRewards["\'][^>]*>.*?</h3>(.*?)<h3\b',
+        content, re.IGNORECASE | re.DOTALL,
+    )
+    if not section:
+        raise ValueError("Official drop-table HTML has no Relics section")
+
+    relics: dict[str, dict[str, list[tuple[str, float]]]] = {}
+    current_key = current_tier = None
+    for row in re.findall(r"<tr\b[^>]*>(.*?)</tr>", section.group(1), re.IGNORECASE | re.DOTALL):
+        cells = re.findall(r"<(th|td)\b[^>]*>(.*?)</\1>", row, re.IGNORECASE | re.DOTALL)
+        values = [html.unescape(re.sub(r"<[^>]+>", "", cell)).strip() for _, cell in cells]
+        if len(cells) == 1 and cells[0][0].lower() == "th":
+            header = HEADER_RE.match(values[0])
+            if header:
+                era, code, tier = header.groups()
+                current_key = f"{era} {code}".strip() if code else era
+                current_tier = tier.lower()
+                relics.setdefault(current_key, {}).setdefault(current_tier, [])
+            else:
+                current_key = current_tier = None
+        elif current_key and len(cells) == 2 and all(tag.lower() == "td" for tag, _ in cells):
+            reward = re.fullmatch(r"(?:Very Common|Common|Uncommon|Rare|Ultra Rare|Legendary)\s*\(([\d.]+)%\)", values[1])
+            if reward:
+                relics[current_key][current_tier].append((values[0], float(reward.group(1))))
+        else:
+            current_key = current_tier = None
+    return relics
 
 
 def parse_file(path: str) -> dict[str, dict[str, list[tuple[str, float]]]]:
@@ -170,4 +207,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

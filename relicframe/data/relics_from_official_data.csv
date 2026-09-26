@@ -89,6 +89,12 @@ Axi A22,Kompressa Prime Receiver,uncommon,False
 Axi A22,Dual Zoren Prime Handle,common,False
 Axi A22,Burston Prime Blueprint,common,False
 Axi A22,Venato Prime Handle,common,False
+Axi A23,Aksomati Prime Link,rare,
+Axi A23,Protea Prime Neuroptics Blueprint,uncommon,
+Axi A23,Burston Prime Barrel,uncommon,
+Axi A23,Burston Prime Stock,common,
+Axi A23,Velox Prime Receiver,common,
+Axi A23,Forma Blueprint,common,
 Axi A3,Akbolto Prime Receiver,rare,True
 Axi A3,Hydroid Prime Neuroptics Blueprint,uncommon,True
 Axi A3,Cernos Prime String,uncommon,True
@@ -137,6 +143,12 @@ Axi B1,Kavasa Prime Buckle,uncommon,True
 Axi B1,Euphona Prime Blueprint,common,True
 Axi B1,Ash Prime Chassis Blueprint,common,True
 Axi B1,Fang Prime Blade,common,True
+Axi B10,Ballistica Prime Blueprint,rare,
+Axi B10,Epitaph Prime Barrel,uncommon,
+Axi B10,Sevagoth Prime Systems Blueprint,uncommon,
+Axi B10,Nautilus Prime Blueprint,common,
+Axi B10,Burston Prime Blueprint,common,
+Axi B10,Forma Blueprint,common,
 Axi B2,Banshee Prime Systems Blueprint,rare,True
 Axi B2,2X Forma Blueprint,uncommon,True
 Axi B2,Orthos Prime Blueprint,uncommon,True
@@ -203,6 +215,12 @@ Axi C11,Akbronco Prime Link,uncommon,True
 Axi C11,Perigale Prime Stock,common,True
 Axi C11,Epitaph Prime Blueprint,common,True
 Axi C11,Braton Prime Barrel,common,True
+Axi C12,Citrine Prime Neuroptics Blueprint,rare,
+Axi C12,Kestrel Prime Blueprint,uncommon,
+Axi C12,Corufell Prime Handle,uncommon,
+Axi C12,Vadarya Prime Stock,common,
+Axi C12,Daikyu Prime Blueprint,common,
+Axi C12,Alternox Prime Receiver,common,
 Axi C2,Cernos Prime Lower Limb,rare,True
 Axi C2,Silva & Aegis Prime Blade,uncommon,True
 Axi C2,Fragor Prime Handle,uncommon,True
@@ -647,6 +665,12 @@ Axi N13,2X Forma Blueprint,uncommon,True
 Axi N13,Quassus Prime Handle,common,True
 Axi N13,Protea Prime Blueprint,common,True
 Axi N13,Okina Prime Blade,common,True
+Axi N14,Nami Skyla Prime Blade,rare,
+Axi N14,Nautilus Prime Carapace,uncommon,
+Axi N14,Ballistica Prime Upper Limb,uncommon,
+Axi N14,Hydroid Prime Chassis Blueprint,common,
+Axi N14,Bronco Prime Blueprint,common,
+Axi N14,Forma Blueprint,common,
 Axi N2,Carrier Prime Carapace,common,True
 Axi N2,Lex Prime Receiver,common,True
 Axi N2,2X Forma Blueprint,uncommon,True
@@ -893,6 +917,12 @@ Axi S20,Xaku Prime Systems Blueprint,uncommon,False
 Axi S20,Paris Prime String,common,False
 Axi S20,Forma Blueprint,common,False
 Axi S20,Dual Zoren Prime Handle,common,False
+Axi S21,Steflos Prime Barrel,rare,
+Axi S21,2X Forma Blueprint,uncommon,
+Axi S21,Gyre Prime Blueprint,uncommon,
+Axi S21,Caliban Prime Chassis Blueprint,common,
+Axi S21,Dual Zoren Prime Handle,common,
+Axi S21,Cedo Prime Stock,common,
 Axi S3,Scindo Prime Blade,rare,True
 Axi S3,Nyx Prime Systems Blueprint,uncommon,True
 Axi S3,Ankyros Prime Blade,uncommon,True
@@ -1175,6 +1205,12 @@ Lith A12,Xaku Prime Systems Blueprint,uncommon,False
 Lith A12,Forma Blueprint,common,False
 Lith A12,Burston Prime Receiver,common,False
 Lith A12,Akbronco Prime Blueprint,common,False
+Lith A13,Alternox Prime Blueprint,rare,
+Lith A13,Gyre Prime Chassis Blueprint,uncommon,
+Lith A13,Dual Zoren Prime Blueprint,uncommon,
+Lith A13,Steflos Prime Receiver,common,
+Lith A13,Paris Prime Lower Limb,common,
+Lith A13,Fang Prime Blade,common,
 Lith A2,Akstiletto Prime Blueprint,rare,True
 Lith A2,Akbronco Prime Link,uncommon,True
 Lith A2,Cernos Prime Blueprint,uncommon,True
@@ -1241,6 +1277,12 @@ Lith B11,Harrow Prime Blueprint,uncommon,True
 Lith B11,Akbronco Prime Blueprint,common,True
 Lith B11,Knell Prime Blueprint,common,True
 Lith B11,Lex Prime Blueprint,common,True
+Lith B12,Baza Prime Stock,rare,
+Lith B12,Ivara Prime Blueprint,uncommon,
+Lith B12,Velox Prime Blueprint,uncommon,
+Lith B12,Aksomati Prime Receiver,common,
+Lith B12,Braton Prime Barrel,common,
+Lith B12,Forma Blueprint,common,
 Lith B2,Ballistica Prime Blueprint,rare,True
 Lith B2,Orthos Prime Blade,uncommon,True
 Lith B2,Braton Prime Receiver,uncommon,True
@@ -1325,6 +1367,12 @@ Lith C14,Lavos Prime Blueprint,uncommon,True
 Lith C14,Kestrel Prime Blade,common,True
 Lith C14,Sevagoth Prime Systems Blueprint,common,True
 Lith C14,Forma Blueprint,common,True
+Lith C15,Cedo Prime Blueprint,rare,
+Lith C15,Yareli Prime Blueprint,uncommon,
+Lith C15,2X Forma Blueprint,uncommon,
+Lith C15,Corufell Prime Stock,common,
+Lith C15,Burston Prime Receiver,common,
+Lith C15,Daikyu Prime String,common,
 Lith C2,Cernos Prime Lower Limb,rare,True
 Lith C2,Nami Skyla Prime Handle,uncommon,True
 Lith C2,Akbolto Prime Barrel,uncommon,True
@@ -1709,6 +1757,12 @@ Lith L7,Sevagoth Prime Blueprint,uncommon,True
 Lith L7,Bronco Prime Receiver,common,True
 Lith L7,Nautilus Prime Carapace,common,True
 Lith L7,Okina Prime Blade,common,True
+Lith L8,Lavos Prime Systems Blueprint,rare,
+Lith L8,Akbronco Prime Link,uncommon,
+Lith L8,Alternox Prime Barrel,uncommon,
+Lith L8,Kestrel Prime Blade,common,
+Lith L8,Perigale Prime Blueprint,common,
+Lith L8,Orthos Prime Handle,common,
 Lith M1,Mag Prime Blueprint,rare,True
 Lith M1,Lex Prime Receiver,common,True
 Lith M1,Soma Prime Blueprint,uncommon,True
@@ -2069,12 +2123,24 @@ Lith S18,Vadarya Prime Barrel,uncommon,False
 Lith S18,Burston Prime Stock,common,False
 Lith S18,Daikyu Prime String,common,False
 Lith S18,Kestrel Prime Blade,common,False
+Lith S19,Sarofang Prime Blade,rare,
+Lith S19,Orthos Prime Blueprint,uncommon,
+Lith S19,Citrine Prime Systems Blueprint,uncommon,
+Lith S19,Forma Blueprint,common,
+Lith S19,Braton Prime Barrel,common,
+Lith S19,Bronco Prime Receiver,common,
 Lith S2,Soma Prime Stock,rare,True
 Lith S2,Carrier Prime Systems,common,True
 Lith S2,2X Forma Blueprint,uncommon,True
 Lith S2,Akbronco Prime Blueprint,common,True
 Lith S2,Nyx Prime Blueprint,common,True
 Lith S2,Kavasa Prime Band,uncommon,True
+Lith S20,Sevagoth Prime Blueprint,rare,
+Lith S20,Hydroid Prime Blueprint,uncommon,
+Lith S20,Bronco Prime Barrel,uncommon,
+Lith S20,Ballistica Prime Receiver,common,
+Lith S20,Burston Prime Receiver,common,
+Lith S20,Forma Blueprint,common,
 Lith S3,Spira Prime Pouch,rare,True
 Lith S3,Ash Prime Blueprint,uncommon,True
 Lith S3,Soma Prime Receiver,uncommon,True
@@ -2471,6 +2537,12 @@ Meso C10,Fang Prime Blueprint,uncommon,True
 Meso C10,Astilla Prime Receiver,common,True
 Meso C10,Lex Prime Barrel,common,True
 Meso C10,Forma Blueprint,common,True
+Meso C11,Citrine Prime Blueprint,rare,
+Meso C11,Daikyu Prime Upper Limb,uncommon,
+Meso C11,2X Forma Blueprint,uncommon,
+Meso C11,Lavos Prime Chassis Blueprint,common,
+Meso C11,Paris Prime Blueprint,common,
+Meso C11,Kompressa Prime Blueprint,common,
 Meso C2,Carrier Prime Cerebrum,rare,True
 Meso C2,Valkyr Prime Neuroptics Blueprint,uncommon,True
 Meso C2,Odonata Prime Blueprint,uncommon,True
@@ -2567,6 +2639,12 @@ Meso D8,Yareli Prime Blueprint,uncommon,False
 Meso D8,Dual Zoren Prime Handle,common,False
 Meso D8,Braton Prime Blueprint,common,False
 Meso D8,Bronco Prime Barrel,common,False
+Meso D9,Dual Zoren Prime Blade,rare,
+Meso D9,Steflos Prime Stock,uncommon,
+Meso D9,Cedo Prime Receiver,uncommon,
+Meso D9,Afentis Prime Handle,common,
+Meso D9,Burston Prime Blueprint,common,
+Meso D9,Paris Prime Upper Limb,common,
 Meso E1,Ember Prime Blueprint,rare,True
 Meso E1,Wyrm Prime Systems,uncommon,True
 Meso E1,2X Forma Blueprint,uncommon,True
@@ -2609,6 +2687,12 @@ Meso E7,Daikyu Prime Upper Limb,uncommon,True
 Meso E7,Gyre Prime Systems Blueprint,common,True
 Meso E7,Forma Blueprint,common,True
 Meso E7,Cedo Prime Stock,common,True
+Meso E8,Epitaph Prime Receiver,rare,
+Meso E8,Ballistica Prime Lower Limb,uncommon,
+Meso E8,Hydroid Prime Neuroptics Blueprint,uncommon,
+Meso E8,Sevagoth Prime Neuroptics Blueprint,common,
+Meso E8,Bronco Prime Receiver,common,
+Meso E8,Forma Blueprint,common,
 Meso F1,Fragor Prime Blueprint,rare,True
 Meso F1,Nekros Prime Neuroptics Blueprint,uncommon,True
 Meso F1,Dual Kamas Prime Handle,uncommon,True
@@ -2759,6 +2843,12 @@ Meso I2,Astilla Prime Blueprint,uncommon,True
 Meso I2,Karyst Prime Blueprint,common,True
 Meso I2,Burston Prime Blueprint,common,True
 Meso I2,Forma Blueprint,common,True
+Meso I3,Ivara Prime Chassis Blueprint,rare,
+Meso I3,Baza Prime Blueprint,uncommon,
+Meso I3,Protea Prime Systems Blueprint,uncommon,
+Meso I3,Aksomati Prime Blueprint,common,
+Meso I3,Burston Prime Blueprint,common,
+Meso I3,Forma Blueprint,common,
 Meso K1,Kogake Prime Gauntlet,rare,True
 Meso K1,Akstiletto Prime Barrel,uncommon,True
 Meso K1,Tigris Prime Receiver,uncommon,True
@@ -2807,6 +2897,12 @@ Meso K8,2X Forma Blueprint,uncommon,False
 Meso K8,Xaku Prime Neuroptics Blueprint,common,False
 Meso K8,Burston Prime Blueprint,common,False
 Meso K8,Lex Prime Barrel,common,False
+Meso K9,Kestrel Prime Grip,rare,
+Meso K9,Caliban Prime Blueprint,uncommon,
+Meso K9,Perigale Prime Receiver,uncommon,
+Meso K9,Athodai Prime Blueprint,common,
+Meso K9,Fang Prime Blueprint,common,
+Meso K9,Yareli Prime Chassis Blueprint,common,
 Meso L1,Limbo Prime Chassis Blueprint,rare,True
 Meso L1,Chroma Prime Chassis Blueprint,uncommon,True
 Meso L1,Dethcube Prime Carapace,uncommon,True
@@ -3323,6 +3419,18 @@ Meso V15,Caliban Prime Blueprint,uncommon,False
 Meso V15,Trumna Prime Blueprint,common,False
 Meso V15,Caliban Prime Chassis Blueprint,common,False
 Meso V15,Venato Prime Handle,common,False
+Meso V16,Velox Prime Barrel,rare,
+Meso V16,Ivara Prime Systems Blueprint,uncommon,
+Meso V16,Okina Prime Handle,uncommon,
+Meso V16,Baza Prime Receiver,common,
+Meso V16,Burston Prime Stock,common,
+Meso V16,Forma Blueprint,common,
+Meso V17,Voruna Prime Systems Blueprint,rare,
+Meso V17,Paris Prime Grip,uncommon,
+Meso V17,Lavos Prime Blueprint,uncommon,
+Meso V17,Corufell Prime Blueprint,common,
+Meso V17,Akbronco Prime Blueprint,common,
+Meso V17,Forma Blueprint,common,
 Meso V2,Vasto Prime Receiver,common,True
 Meso V2,Paris Prime Blueprint,common,True
 Meso V2,Ash Prime Chassis Blueprint,common,True
@@ -3611,6 +3719,18 @@ Neo C1,Pyrana Prime Receiver,uncommon,True
 Neo C1,Limbo Prime Systems Blueprint,common,True
 Neo C1,Kronen Prime Blueprint,common,True
 Neo C1,Mesa Prime Chassis Blueprint,common,True
+Neo C10,Corufell Prime Receiver,rare,
+Neo C10,Styanax Prime Systems Blueprint,uncommon,
+Neo C10,Afentis Prime Barrel,uncommon,
+Neo C10,Forma Blueprint,common,
+Neo C10,Caliban Prime Chassis Blueprint,common,
+Neo C10,Braton Prime Stock,common,
+Neo C11,Caliban Prime Systems Blueprint,rare,
+Neo C11,Cedo Prime Barrel,uncommon,
+Neo C11,Vadarya Prime Receiver,uncommon,
+Neo C11,Citrine Prime Chassis Blueprint,common,
+Neo C11,Lex Prime Receiver,common,
+Neo C11,Daikyu Prime Blueprint,common,
 Neo C2,Corvas Prime Barrel,rare,True
 Neo C2,Orthos Prime Blueprint,uncommon,True
 Neo C2,Magnus Prime Receiver,uncommon,True
@@ -3845,6 +3965,12 @@ Neo H4,Wisp Prime Chassis Blueprint,uncommon,True
 Neo H4,Larkspur Prime Blueprint,common,True
 Neo H4,Fang Prime Blueprint,common,True
 Neo H4,Forma Blueprint,common,True
+Neo H5,Hydroid Prime Systems Blueprint,rare,
+Neo H5,Sevagoth Prime Chassis Blueprint,uncommon,
+Neo H5,Nautilus Prime Systems,uncommon,
+Neo H5,Burston Prime Stock,common,
+Neo H5,Nami Skyla Prime Handle,common,
+Neo H5,Forma Blueprint,common,
 Neo I1,Ivara Prime Chassis Blueprint,rare,True
 Neo I1,Akjagara Prime Receiver,uncommon,True
 Neo I1,Limbo Prime Blueprint,uncommon,True
@@ -3869,6 +3995,12 @@ Neo K1,Helios Prime Blueprint,uncommon,True
 Neo K1,Valkyr Prime Blueprint,common,True
 Neo K1,Silva & Aegis Prime Hilt,common,True
 Neo K1,Euphona Prime Blueprint,common,True
+Neo K10,Kompressa Prime Barrel,rare,
+Neo K10,Venato Prime Blueprint,uncommon,
+Neo K10,Daikyu Prime Lower Limb,uncommon,
+Neo K10,Bronco Prime Blueprint,common,
+Neo K10,Forma Blueprint,common,
+Neo K10,Gyre Prime Systems Blueprint,common,
 Neo K2,Kogake Prime Gauntlet,rare,True
 Neo K2,Mirage Prime Systems Blueprint,uncommon,True
 Neo K2,Akbolto Prime Link,uncommon,True
@@ -4079,6 +4211,12 @@ Neo N24,Lavos Prime Neuroptics Blueprint,uncommon,True
 Neo N24,Daikyu Prime Blueprint,common,True
 Neo N24,Bronco Prime Receiver,common,True
 Neo N24,Venato Prime Handle,common,True
+Neo N25,Nautilus Prime Cerebrum,rare,
+Neo N25,Nami Skyla Prime Blueprint,uncommon,
+Neo N25,Burston Prime Barrel,uncommon,
+Neo N25,Epitaph Prime Blueprint,common,
+Neo N25,Ballistica Prime String,common,
+Neo N25,Forma Blueprint,common,
 Neo N3,Nekros Prime Systems Blueprint,rare,True
 Neo N3,Fang Prime Handle,uncommon,True
 Neo N3,Ash Prime Neuroptics Blueprint,uncommon,True
@@ -4139,6 +4277,12 @@ Neo O3,Xaku Prime Systems Blueprint,uncommon,True
 Neo O3,Paris Prime Upper Limb,common,True
 Neo O3,Lex Prime Barrel,common,True
 Neo O3,Forma Blueprint,common,True
+Neo O4,Okina Prime Blueprint,rare,
+Neo O4,Baza Prime Barrel,uncommon,
+Neo O4,Braton Prime Blueprint,uncommon,
+Neo O4,Ivara Prime Neuroptics Blueprint,common,
+Neo O4,Protea Prime Blueprint,common,
+Neo O4,Forma Blueprint,common,
 Neo P1,Pangolin Prime Blueprint,rare,True
 Neo P1,Akjagara Prime Receiver,uncommon,True
 Neo P1,Rubico Prime Stock,uncommon,True
@@ -4151,6 +4295,12 @@ Neo P10,Cedo Prime Receiver,uncommon,True
 Neo P10,Nautilus Prime Carapace,common,True
 Neo P10,Forma Blueprint,common,True
 Neo P10,Burston Prime Blueprint,common,True
+Neo P11,Protea Prime Chassis Blueprint,rare,
+Neo P11,Aksomati Prime Barrel,uncommon,
+Neo P11,Braton Prime Receiver,uncommon,
+Neo P11,Okina Prime Blade,common,
+Neo P11,Burston Prime Receiver,common,
+Neo P11,Forma Blueprint,common,
 Neo P2,Pandero Prime Receiver,rare,True
 Neo P2,2X Forma Blueprint,uncommon,True
 Neo P2,Titania Prime Blueprint,uncommon,True
@@ -4439,6 +4589,12 @@ Neo V12,Quassus Prime Blueprint,uncommon,False
 Neo V12,Akbronco Prime Blueprint,common,False
 Neo V12,Paris Prime Blueprint,common,False
 Neo V12,Yareli Prime Chassis Blueprint,common,False
+Neo V13,Vadarya Prime Blueprint,rare,
+Neo V13,Lavos Prime Neuroptics Blueprint,uncommon,
+Neo V13,2X Forma Blueprint,uncommon,
+Neo V13,Paris Prime String,common,
+Neo V13,Sarofang Prime Handle,common,
+Neo V13,Styanax Prime Blueprint,common,
 Neo V2,Vauban Prime Blueprint,rare,True
 Neo V2,Galatine Prime Handle,uncommon,True
 Neo V2,2X Forma Blueprint,uncommon,True
@@ -4511,6 +4667,12 @@ Neo Y1,2X Forma Blueprint,uncommon,False
 Neo Y1,Fang Prime Blueprint,common,False
 Neo Y1,Lex Prime Receiver,common,False
 Neo Y1,Trumna Prime Blueprint,common,False
+Neo Y2,Yareli Prime Systems Blueprint,rare,
+Neo Y2,Steflos Prime Blueprint,uncommon,
+Neo Y2,2X Forma Blueprint,uncommon,
+Neo Y2,Burston Prime Stock,common,
+Neo Y2,Venato Prime Handle,common,
+Neo Y2,Lex Prime Blueprint,common,
 Neo Z1,Zephyr Prime Blueprint,rare,True
 Neo Z1,Galatine Prime Handle,uncommon,True
 Neo Z1,2X Forma Blueprint,uncommon,True
@@ -4577,6 +4739,12 @@ Neo Z9,Ninkondi Prime Chain,uncommon,True
 Neo Z9,Equinox Prime Chassis Blueprint,common,True
 Neo Z9,Burston Prime Blueprint,common,True
 Neo Z9,Forma Blueprint,common,True
+Requiem,Exilus Weapon Adapter Blueprint,rare,
+Requiem,Lohk,uncommon,
+Requiem,Xata,uncommon,
+Requiem,1200X Kuva,common,
+Requiem,Ayatan Amber Star,common,
+Requiem,Riven Sliver,common,
 Requiem I,Exilus Weapon Adapter Blueprint,rare,
 Requiem I,Lohk,uncommon,
 Requiem I,Xata,uncommon,
@@ -4601,12 +4769,6 @@ Requiem Iv,Khra,uncommon,
 Requiem Iv,1200X Kuva,common,
 Requiem Iv,Ayatan Amber Star,common,
 Requiem Iv,Riven Sliver,common,
-Requiem,Exilus Weapon Adapter Blueprint,rare,
-Requiem,Lohk,uncommon,
-Requiem,Xata,uncommon,
-Requiem,1200X Kuva,common,
-Requiem,Ayatan Amber Star,common,
-Requiem,Riven Sliver,common,
 Vanguard C1,Caliban Prime Systems Blueprint,rare,False
 Vanguard C1,Mesa Prime Systems Blueprint,uncommon,False
 Vanguard C1,Ash Prime Systems Blueprint,uncommon,False

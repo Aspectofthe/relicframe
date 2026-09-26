@@ -352,6 +352,22 @@ try
 }
 finally { File.Delete(relicFilterFixture); }
 var productionRelics = Relic.LoadCsv("relicframe/data/relics_from_official_data.csv", includeRequiem: false);
+var officialHtmlFixture = "<h3 id=\"missionRewards\">Missions</h3><table><tr><td>Wrong reward</td></tr></table>"
+    + "<h3 id=\"relicRewards\">Relics</h3><table><tr><th colspan=\"2\">Axi C12 Relic (Intact)</th></tr>"
+    + "<tr><td>Citrine Prime Neuroptics Blueprint</td><td>Rare (2.00%)</td></tr>"
+    + "<tr><td>Corufell Prime Handle</td><td>Uncommon (11.00%)</td></tr>"
+    + "<tr><td>Other Part</td><td>Uncommon (11.00%)</td></tr>"
+    + "<tr><td>First &amp; Second</td><td>Uncommon (25.33%)</td></tr>"
+    + "<tr><td>Fifth Part</td><td>Uncommon (25.33%)</td></tr>"
+    + "<tr><td>Sixth Part</td><td>Uncommon (25.33%)</td></tr></table><h3 id=\"keyRewards\">Keys</h3>";
+var officialFixtureRelics = OfficialDropTables.ParseRelics(officialHtmlFixture);
+Assert(officialFixtureRelics.TryGetValue("Axi C12", out var officialFixtureRelic)
+    && officialFixtureRelic.Rewards.Count == 6
+    && officialFixtureRelic.Rewards[0] == new Reward("Citrine Prime Neuroptics Blueprint", "rare")
+    && officialFixtureRelic.Rewards[3] == new Reward("First & Second", "common"),
+    "official HTML importer scopes to relic rewards, decodes names, and classifies numeric chances");
+Assert(productionRelics.ContainsKey("Axi C12") && productionRelics.ContainsKey("Vanguard C1"),
+    "refreshed catalog includes new Narin's Blade relics and retained historical Vanguard relics");
 var completionSources = new[]
 {
     new Relic("Lith Test", [new Reward("Example Prime Blueprint", "rare")], true),

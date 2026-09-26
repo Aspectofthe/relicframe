@@ -16,8 +16,9 @@ import tempfile
 import unittest
 
 from parse_official_drops import (
-    parse_file, classify_rarity, build_standard_relics, write_csv,
+    parse_file, parse_html, classify_rarity, build_standard_relics, write_csv,
 )
+from update_official_drops import historical_relics, previous_vault_status
 
 
 # A standard 6-slot relic block, formatted the way DE's actual export uses:
@@ -113,6 +114,33 @@ class TestParseFile(unittest.TestCase):
         self.assertEqual(len(parsed), 1)
 
 
+class TestParseHtml(unittest.TestCase):
+    def test_only_relic_rewards_section_is_parsed(self):
+        html = (
+            '<h3 id="missionRewards">Missions:</h3><table>'
+            '<tr><th colspan="2">Lith A1 Relic (Intact)</th></tr>'
+            '<tr><td>Wrong Reward</td><td>Rare (2.00%)</td></tr></table>'
+            '<h3 id="relicRewards">Relics:</h3><table>'
+            '<tr><th colspan="2">Lith A1 Relic (Intact)</th></tr>'
+            '<tr><td>Ember Prime Blueprint</td><td>Rare (2.00%)</td></tr>'
+            '<tr><td>Frost Prime Chassis</td><td>Uncommon (11.00%)</td></tr>'
+            '<tr><td>Frost Prime Systems</td><td>Uncommon (11.00%)</td></tr>'
+            '<tr><td>Junk &amp; A</td><td>Uncommon (25.33%)</td></tr>'
+            '<tr><td>Junk B</td><td>Uncommon (25.33%)</td></tr>'
+            '<tr><td>Junk C</td><td>Uncommon (25.33%)</td></tr></table>'
+            '<h3 id="keyRewards">Keys:</h3>'
+        )
+        parsed = parse_html(html)
+        standard, non_standard = build_standard_relics(parsed)
+        self.assertEqual(non_standard, [])
+        self.assertEqual(standard["Lith A1"][3], ("Junk & A", "common"))
+        self.assertNotIn("Wrong Reward", [name for name, _ in standard["Lith A1"]])
+
+    def test_missing_relic_section_fails_closed(self):
+        with self.assertRaises(ValueError):
+            parse_html('<h3 id="missionRewards">Missions:</h3>')
+
+
 class TestClassifyRarity(unittest.TestCase):
     def test_exact_matches(self):
         self.assertEqual(classify_rarity(25.33, "intact"), "common")
@@ -204,7 +232,16 @@ class TestWriteCsv(unittest.TestCase):
             row = next(csv.DictReader(f))
         self.assertEqual(row["vaulted"], "True")
 
+    def test_historical_rewards_and_vault_status_can_be_carried_forward(self):
+        with open(self.path, "w", newline="", encoding="utf-8") as output:
+            writer = csv.writer(output)
+            writer.writerow(["relic_name", "reward_name", "rarity", "vaulted"])
+            writer.writerow(["Vanguard C1", "Caliban Prime Systems Blueprint", "rare", "False"])
+        from pathlib import Path
+        self.assertEqual(historical_relics(Path(self.path))["Vanguard C1"],
+                         [("Caliban Prime Systems Blueprint", "rare")])
+        self.assertEqual(previous_vault_status(Path(self.path))["Vanguard C1"], False)
+
 
 if __name__ == "__main__":
     unittest.main()
-
