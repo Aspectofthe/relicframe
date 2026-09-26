@@ -75,7 +75,42 @@ if (string.IsNullOrWhiteSpace(token) || !ulong.TryParse(Environment.GetEnvironme
     throw new InvalidOperationException("Set RELICFRAME_CSHARP_TOKEN and RELICFRAME_TEST_GUILD_ID. Do not paste credentials into source or chat.");
 var dataPath = Path.GetFullPath(Environment.GetEnvironmentVariable("RELICFRAME_DATA_DIR") ?? "relicframe/data");
 var runtimePath = Path.GetFullPath(Environment.GetEnvironmentVariable("RELICFRAME_RUNTIME_DIR") ?? "csharp/runtime");
-var relics = Relic.LoadCsv(Path.Combine(dataPath, "relics_from_official_data.csv"), includeRequiem: false);
+var bundledRelicCsv = Path.Combine(dataPath, "relics_from_official_data.csv");
+Directory.CreateDirectory(runtimePath);
+var liveRelicCsv = Path.GetFullPath(Environment.GetEnvironmentVariable("RELICFRAME_RELIC_CSV_PATH")
+    ?? Path.Combine(runtimePath, "official_relics.csv"));
+if (!File.Exists(liveRelicCsv))
+{
+    Directory.CreateDirectory(Path.GetDirectoryName(liveRelicCsv)!);
+    File.Copy(bundledRelicCsv, liveRelicCsv);
+}
+var relicRefreshMarker = Path.Combine(runtimePath, "official_drops_last_success.txt");
+if (Environment.GetEnvironmentVariable("RELICFRAME_OFFICIAL_DROPS") != "0"
+    && OfficialDropTables.RefreshDue(relicRefreshMarker, DateTimeOffset.UtcNow))
+{
+    try
+    {
+        Console.WriteLine(await OfficialDropTables.RefreshAsync(liveRelicCsv, checkOnly: false));
+        await File.WriteAllTextAsync(relicRefreshMarker, DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[official-drops] refresh failed ({ex.GetType().Name}); using saved relic data and retrying at next start");
+    }
+}
+IReadOnlyDictionary<string, Relic> relics;
+try
+{
+    var saved = Relic.LoadCsv(liveRelicCsv, includeRequiem: false);
+    var combined = new Dictionary<string, Relic>(Relic.LoadCsv(bundledRelicCsv, includeRequiem: false), StringComparer.Ordinal);
+    foreach (var (name, relic) in saved) combined[name] = relic;
+    relics = combined;
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"[official-drops] saved cache invalid ({ex.GetType().Name}); using bundled relic data");
+    relics = Relic.LoadCsv(bundledRelicCsv, includeRequiem: false);
+}
 using var lifetime = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; lifetime.Cancel(); };
 using var http = new MarketHttp();

@@ -368,6 +368,17 @@ Assert(officialFixtureRelics.TryGetValue("Axi C12", out var officialFixtureRelic
     "official HTML importer scopes to relic rewards, decodes names, and classifies numeric chances");
 Assert(productionRelics.ContainsKey("Axi C12") && productionRelics.ContainsKey("Vanguard C1"),
     "refreshed catalog includes new Narin's Blade relics and retained historical Vanguard relics");
+var officialMarker = Path.Combine(Path.GetTempPath(), "relicframe-official-marker-" + Guid.NewGuid().ToString("N"));
+try
+{
+    var now = DateTimeOffset.UtcNow;
+    Assert(OfficialDropTables.RefreshDue(officialMarker, now), "missing official drop check marker is due");
+    File.WriteAllText(officialMarker, now.AddHours(-23).ToString("O"));
+    Assert(!OfficialDropTables.RefreshDue(officialMarker, now), "successful official check is cached for 24 hours");
+    File.WriteAllText(officialMarker, now.AddHours(-25).ToString("O"));
+    Assert(OfficialDropTables.RefreshDue(officialMarker, now), "old official check is due again");
+}
+finally { if (File.Exists(officialMarker)) File.Delete(officialMarker); }
 var completionSources = new[]
 {
     new Relic("Lith Test", [new Reward("Example Prime Blueprint", "rare")], true),

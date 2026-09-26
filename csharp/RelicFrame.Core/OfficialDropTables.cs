@@ -8,6 +8,19 @@ namespace RelicFrame.Core;
 public static class OfficialDropTables
 {
     public const string Url = "https://warframe-web-assets.nyc3.cdn.digitaloceanspaces.com/uploads/cms/hnfvc0o3jnfvc873njb03enrf56.html";
+    public static bool RefreshDue(string markerPath, DateTimeOffset now)
+    {
+        try
+        {
+            if (!File.Exists(markerPath)) return true;
+            if (!DateTimeOffset.TryParse(File.ReadAllText(markerPath), CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind, out var lastSuccess)) return true;
+            var elapsed = now - lastSuccess;
+            return elapsed < TimeSpan.Zero || elapsed >= TimeSpan.FromHours(24);
+        }
+        catch (IOException) { return true; }
+        catch (UnauthorizedAccessException) { return true; }
+    }
     private static readonly Regex Section = new("<h3\\s+id=[\"']relicRewards[\"'][^>]*>.*?</h3>(.*?)<h3\\b", RegexOptions.IgnoreCase | RegexOptions.Singleline);
     private static readonly Regex Row = new("<tr\\b[^>]*>(.*?)</tr>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
     private static readonly Regex Cell = new("<(th|td)\\b[^>]*>(.*?)</\\1>", RegexOptions.IgnoreCase | RegexOptions.Singleline);

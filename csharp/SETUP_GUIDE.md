@@ -36,14 +36,14 @@ For a Git checkout, use `git clone --branch csharp-rewrite https://github.com/As
 
 ### Refresh official relic drop tables
 
-The bot loads its relic reward list from `relicframe/data/relics_from_official_data.csv` at startup. To pull the current [Digital Extremes PC drop tables](https://warframe-web-assets.nyc3.cdn.digitaloceanspaces.com/uploads/cms/hnfvc0o3jnfvc873njb03enrf56.html), run these commands from the repository root using the same .NET SDK as the bot (or replace `dotnet` with `.\.tools\dotnet\dotnet.exe` if the SDK is bundled there):
+`run-bot.cmd` and `run-bot.sh` now check the [Digital Extremes PC drop tables](https://warframe-web-assets.nyc3.cdn.digitaloceanspaces.com/uploads/cms/hnfvc0o3jnfvc873njb03enrf56.html) automatically at startup, at most once per 24 hours after a successful check. The bot stores the refreshed relic CSV in its ignored runtime directory rather than changing the Git-tracked reference file. If the official page is unreachable, startup continues with the saved relic CSV (or the bundled CSV on first run), and the next launch retries. Set `RELICFRAME_OFFICIAL_DROPS=0` to disable this startup check. To check or update the Git-tracked reference CSV manually, run these commands from the repository root using the same .NET SDK as the bot (or replace `dotnet` with `.\.tools\dotnet\dotnet.exe` if the SDK is bundled there):
 
 ```powershell
 dotnet run --project csharp/RelicFrame.Bot -c Release -- --update-official-drops --check
 dotnet run --project csharp/RelicFrame.Bot -c Release -- --update-official-drops
 ```
 
-The first command reports the published update date and relic counts without changing files. The second makes one request to DE, validates the six-slot relic data, and replaces the CSV only after validation. It preserves already catalogued relics omitted from the current export (including Vanguard) and keeps existing vault flags; new relics get unknown vault status rather than an invented value. Restart the bot afterward. This is separate from Warframe.market's rate-limited price API. The DE page supplies drops, not the Warframe.market item catalog or the list of Riven-eligible weapons, so new Riven weapons are refreshed by the market catalog path instead.
+The first command reports the published update date and relic counts without changing files. The second makes one request to DE, validates the six-slot relic data, and replaces the reference CSV only after validation. Both the automatic and manual refresh preserve already catalogued relics omitted from the current export (including Vanguard) and keep existing vault flags; new relics get unknown vault status rather than an invented value. Restart the bot afterward if it is running. This is separate from Warframe.market's rate-limited price API. The DE page supplies drops, not the Warframe.market item catalog or the list of Riven-eligible weapons, so new Riven weapons are refreshed by the market catalog path instead.
 
 ## 2. Create the Discord bot
 
